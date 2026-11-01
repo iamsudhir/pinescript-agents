@@ -49,3 +49,7 @@ temp/
 .claude/.state.json
 .claude/.last_session
 .claude/.lock_state
+# Python
+.venv/
+__pycache__/
+*.pyc
