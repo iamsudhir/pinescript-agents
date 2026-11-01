@@ -1,5 +1,5 @@
 import { readdir, readFile } from "fs/promises";
-import { join, relative } from "path";
+import { join, relative, sep } from "path";
 import type { DocChunk } from "./types.js";
 
 async function findMarkdownFiles(dir: string): Promise<string[]> {
@@ -56,7 +56,8 @@ function splitIntoChunks(
   source: "manual" | "docs",
   basePath: string
 ): DocChunk[] {
-  const relPath = relative(basePath, filePath);
+  // Forward slashes on every OS so path checks (e.g. "reference/") work on Windows
+  const relPath = relative(basePath, filePath).split(sep).join("/");
   const sections = content.split(/^(?=## )/gm);
   const chunks: DocChunk[] = [];
   let chunkIdx = 0;
@@ -113,12 +114,14 @@ export async function loadDocs(
   ] as const) {
     try {
       const files = await findMarkdownFiles(dir);
-      for (const file of files) {
+      for (const rawFile of files) {
+        const file = rawFile.split(sep).join("/");
         // Skip legacy v3/v4/v5 docs — duplicate content that pollutes search
         if (/\/v[345]\//.test(file)) continue;
         // Skip repo README and INDEX files — not Pine Script content
         if (/\/(README|INDEX)\.md$/.test(file)) continue;
-        const content = await readFile(file, "utf-8");
+        // Normalize CRLF (Windows checkouts) so heading/paragraph splits work
+        const content = (await readFile(rawFile, "utf-8")).replace(/\r\n/g, "\n");
         chunks.push(...splitIntoChunks(content, file, source, dir));
       }
     } catch {
