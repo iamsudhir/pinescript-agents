@@ -39,6 +39,8 @@ tools/traderspost-to-pine.py  TradersPost trade CSV -> Pine arrays for traderspo
 ## Requirements
 
 - Python 3.9+ (video tools), Node 18+ (docs MCP server)
+- Windows: run `setup.sh` from Git Bash. Install Python with `winget install Python.Python.3.12`
+  and turn off the python/python3 "App execution aliases" (Settings > Apps > Advanced app settings)
 - [Claude Code](https://claude.ai/code) CLI or IDE extension
 - Optional: `ffmpeg` and `pip install openai-whisper` for videos without captions
 - No API keys or secrets are needed. Claude Code uses your own Claude login.
@@ -65,7 +67,7 @@ claude            # approve the "pinescript" MCP server when prompted
 Video analysis directly from the shell:
 
 ```bash
-source .venv/bin/activate
+source .venv/bin/activate      # Windows Git Bash: source .venv/Scripts/activate
 python tools/video-analyzer.py "https://youtube.com/watch?v=..."
 ```
 
