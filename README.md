@@ -8,18 +8,16 @@ A comprehensive Pine Script development environment powered by Claude Code's Ski
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/TradersPost/pinescript-agents.git
+   git clone https://github.com/iamsudhir/pinescript-agents.git
    cd pinescript-agents
    ```
 
-2. **Install dependencies** (for YouTube video analysis)
+2. **Run setup** (Python venv for video tools + docs MCP server)
    ```bash
-   pip install -r requirements.txt
-
-   # Also need FFmpeg for audio processing (optional, for Whisper fallback)
-   # macOS: brew install ffmpeg
-   # Ubuntu: sudo apt install ffmpeg
+   ./setup.sh
    ```
+   See [SETUP.md](SETUP.md) for requirements and an architecture overview.
+   FFmpeg is optional (Whisper fallback for videos without captions).
 
 3. **Open in your IDE with Claude Code**
    ```bash

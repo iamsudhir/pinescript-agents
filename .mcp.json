@@ -1,9 +1,8 @@
 {
   "mcpServers": {
     "pinescript": {
-      "command": "npx",
-      "args": ["tsx", "docs/server/src/index.ts"],
-      "cwd": "/Users/hartman/Dropbox/TomHartman.ca/TradersPost/Projects/pinescript-agents/docs/server"
+      "command": "npm",
+      "args": ["--prefix", "docs/server", "run", "--silent", "start"]
     }
   }
 }
