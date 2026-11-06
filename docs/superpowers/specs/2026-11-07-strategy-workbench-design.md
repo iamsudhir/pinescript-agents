@@ -21,7 +21,7 @@ Turn this repo from "Claude writes Pine in a chat" into a local framework where 
 
 | Topic | Choice |
 |---|---|
-| Code generation | Anthropic API (`anthropic` SDK), key in `.env` as `ANTHROPIC_API_KEY`, model from `ANTHROPIC_MODEL` (default `claude-sonnet-5-5`) |
+| Code generation | Anthropic API (`anthropic` SDK), key in `.env` as `ANTHROPIC_API_KEY`, model from `ANTHROPIC_MODEL` (default `claude-opus-5-5`) |
 | UI | Streamlit, local (`streamlit run app.py`) |
 | Data | yfinance now; Dhan later behind the same `load_data()` function |
 | Backtest engine | `backtesting.py` (`Backtest.run`, `Backtest.optimize`) |
@@ -31,8 +31,9 @@ Turn this repo from "Claude writes Pine in a chat" into a local framework where 
 ## Architecture
 
 ```
-app.py  (Streamlit UI only — no business logic)
+app.py + ui/library.py, ui/create.py, ui/strategy.py  (Streamlit UI only — no business logic)
   │
+  ├── workbench/actions.py    use cases shared by UI and CLI: create/import, backtest, optimize, chart
   ├── workbench/generate.py   URL/description/.pine → Claude API → {pine, python, notes}
   │       └── reuses tools/video-analyzer.py (VideoAnalyzer) for transcript + metadata
   ├── workbench/engine.py     load strategy class from source, list params, run(), optimize()
@@ -99,8 +100,9 @@ optimizations(
   cash REAL NOT NULL, commission REAL NOT NULL,
   ranges TEXT NOT NULL,              -- JSON {param: [min, max, step]}
   maximize TEXT NOT NULL,            -- 'Return [%]' | 'Sharpe Ratio' | 'Return/MaxDD'
-  results TEXT NOT NULL,             -- JSON records: one row per combination (params + key stats)
+  results TEXT NOT NULL,             -- JSON records: one row per combination (params + the maximized metric)
   best_params TEXT NOT NULL,         -- JSON
+  best_value REAL,                   -- metric of the best combination (NULL if none traded)
   note TEXT,
   created_at TEXT NOT NULL
 )
@@ -119,6 +121,10 @@ price_bars(
   ticker TEXT NOT NULL, interval TEXT NOT NULL, ts TEXT NOT NULL,
   open REAL, high REAL, low REAL, close REAL, volume REAL,
   PRIMARY KEY (ticker, interval, ts)
+)
+
+price_fetches(                       -- date ranges already downloaded, so cached ranges never re-download
+  ticker TEXT NOT NULL, interval TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL
 )
 ```
 
@@ -150,10 +156,10 @@ version + params on cached bars (deterministic and fast). PRAGMA `foreign_keys=O
 ### `workbench/insights.py`
 - `summary(strategy_id) -> dict` — computed on demand from `runs`/`optimizations` (not stored,
   so always current): run count; best and worst run (by Return and by Sharpe); mean/median
-  Sharpe, Return, MaxDD across runs; per-ticker and per-interval table (runs, % profitable,
-  avg Return, avg Sharpe); parameter stability from the latest optimization (share of
-  combinations within 80% of the best metric, and the best metric's neighbours — a sharp
-  lone peak is flagged as likely overfit).
+  Sharpe, Return, MaxDD across runs; per ticker+interval table (runs, % profitable,
+  avg Return, avg Sharpe); parameter stability from the latest optimization: share of
+  combinations scoring within 80% of the best — under 10% means a lone spike, flagged as
+  likely overfit.
 - `analyze(strategy_id, run_ids=None) -> insight_id` — sends Claude the strategy's Python
   code, Claude's translation notes, your notes, `summary()`, and the selected runs'
   stats (default: last 20 runs + latest optimization's top 20 rows; trades/equity are
@@ -163,7 +169,8 @@ version + params on cached bars (deterministic and fast). PRAGMA `foreign_keys=O
 
 ### `workbench/data.py`
 `load_data(ticker, interval, start, end) -> DataFrame[Open, High, Low, Close, Volume]`
-- Reads `price_bars`; fetches only missing ranges from yfinance (`auto_adjust=True`), upserts.
+- If `price_fetches` has a range covering the request, reads `price_bars` only; otherwise downloads
+  the requested range from yfinance (`auto_adjust=True`), upserts it and logs the range.
 - Flattens yfinance MultiIndex columns; drops NaN rows; raises `DataError` on empty result
   (e.g. bad ticker, intraday interval beyond yfinance's history limit — message says which).
 - Today's bar is never cached (it is still forming).
@@ -171,8 +178,9 @@ version + params on cached bars (deterministic and fast). PRAGMA `foreign_keys=O
 ### `workbench/engine.py`
 - `load_strategy(code) -> (cls, params)` — see contract.
 - `run(code, df, params, cash=1_000_000, commission=0.0005) -> RunResult(stats, trades, equity, bt)`
-- `optimize(code, df, ranges, maximize, cash, commission, max_tries=500) -> OptResult(results_df, best_params)`
-  uses `Backtest.optimize(..., return_heatmap=True)`; `Return/MaxDD` implemented as a callable.
+- `optimize(code, df, ranges, maximize, cash, commission, max_tries=500) -> OptResult(results_df, best_params, best_value)`
+  uses `Backtest.optimize(..., return_heatmap=True)`; results hold params + the maximized metric per
+  combination (backtesting.py's heatmap; full stats come from loading a row into Backtest); `Return/MaxDD` implemented as a callable.
   Grids larger than `max_tries` are randomly sampled (backtesting.py `max_tries`).
 - `chart_html(run_result) -> str` via `bt.plot(open_browser=False, filename=tmp)`.
 
@@ -185,8 +193,8 @@ version + params on cached bars (deterministic and fast). PRAGMA `foreign_keys=O
   + the strategy contract + a reference example (SMA cross in both languages).
 - Output via a tool/JSON schema: `{name, slug, pine, python, notes[]}`. Invalid JSON or a
   contract failure → one automatic retry with the error appended; then surface the error.
-- After generation, Pine is linted with `scripts/validate-pine.sh` if bash is available; warnings
-  shown, never blocking.
+- Pine is linted with `lint_pine()`, a Python copy of the four checks in `scripts/validate-pine.sh`
+  (so it works without bash); warnings shown in the Code tab, never blocking.
 
 ### `workbench/db.py`
 Plain functions: `connect()`, `init_schema()`, `create_strategy`, `add_version`,
@@ -200,8 +208,8 @@ Sidebar navigation: **Create**, **Library**, **Strategy**.
 1. **Create** — tabs: *YouTube URL* | *Description* | *Import .pine* (picker over `projects/*.pine`,
    plus "Import all" with progress). Generate → saves strategy v1 → opens it in Strategy page.
 2. **Library** — table: name, status, rating, source type, created, # runs, latest run
-   Return/Sharpe/MaxDD, best optimization metric; search box; filter by status and min rating;
-   delete with confirm.
+   Return/Sharpe/MaxDD, latest optimization's best metric; search box; filter by status and
+   min rating. (Delete lives on the Strategy page, Insights tab, behind a confirm checkbox.)
 3. **Strategy** (selected strategy) — tabs:
    - **Code**: Pine and Python editors (`st.text_area`, monospace), Save → new version,
      version selector, copy/download buttons, **Fix with Claude** (pre-filled with last error).
@@ -238,8 +246,8 @@ Sidebar navigation: **Create**, **Library**, **Strategy**.
 
 ## Testing
 
-`tests/test_workbench.py` (pytest), offline, using a fixed CSV fixture `tests/data/sample_1d.csv`
-and a temp DB:
+`tests/test_*.py` (pytest, one file per module), offline, using the GOOG daily data that ships
+with backtesting.py (`backtesting.test.GOOG`) and a temp DB:
 - `load_strategy` finds params; rejects code with zero/two Strategy classes.
 - `run` returns stats with expected keys; a known SMA-cross on the fixture gives a stable trade count.
 - `optimize` returns one row per combination and a best_params dict.
@@ -247,6 +255,8 @@ and a temp DB:
   removes versions, runs, optimizations and insights.
 - `insights.summary` on three saved runs over two tickers gives correct per-ticker counts and best run.
 - `data.load_data` with yfinance monkeypatched: second call hits the cache only for the cached range.
+
+- `tests/test_app.py`: Streamlit `AppTest` smoke test renders Library and Strategy pages without exceptions.
 
 Claude API calls are not unit-tested; `generate.py` has a `--dry-run` path that returns the
 reference example for UI testing without a key.
