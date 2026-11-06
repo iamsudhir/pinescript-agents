@@ -33,6 +33,7 @@ def test_run_returns_params_stats_trades_equity(goog):
     assert res.params == {"n1": 5, "n2": 20, "use_exit": True, "stop_pct": 0.0}
     assert list(res.stats) == engine.KEY_STATS
     assert res.stats["# Trades"] == len(res.trades) > 0
+    assert isinstance(res.stats["# Trades"], int)
     assert res.trades[0]["EntryTime"].startswith("20") and isinstance(res.trades[0]["Duration"], str)
     assert len(res.equity) == len(goog) and res.equity[0][1] == 100_000
 
@@ -50,6 +51,7 @@ def test_values_and_grid_size():
     assert engine.values(0.5, 1.0, 0.25, 1.0) == [0.5, 0.75, 1.0]
     assert engine.values(0, 1, 1, True) == [False, True]
     assert engine.values(10, 5, 1, 3) == []
+    assert engine.values(0, 1, 0.6, 0.2) == [0.0, 0.6]
     assert engine.grid_size({"n1": (5, 15, 5), "use_exit": (0, 1, 1)}, {"n1": 10, "use_exit": True}) == 6
     assert engine.grid_size({}, {"n1": 10}) == 0
 
@@ -73,3 +75,14 @@ def test_optimize_returns_one_row_per_combination(goog):
 def test_optimize_rejects_empty_range(goog):
     with pytest.raises(ValueError, match="at least one value"):
         engine.optimize(SMA_CODE, goog, {"n1": (10, 5, 1)})
+
+
+def test_optimize_with_no_result_has_no_fake_best(goog):
+    res = engine.optimize(SMA_CODE, goog, {"n1": (3000, 3002, 1)})
+    assert res.results.empty and res.best_params == {} and res.best_value is None
+
+
+def test_optimize_samples_large_grids(goog):
+    res = engine.optimize(SMA_CODE, goog, {"n1": (5, 15, 5), "use_exit": (0, 1, 1)}, max_tries=3)
+    assert 0 < len(res.results) <= 6
+    assert set(res.best_params) == {"n1", "use_exit"}

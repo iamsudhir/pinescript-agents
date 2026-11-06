@@ -79,9 +79,11 @@ def run(code, df, params=None, cash=1_000_000, commission=0.0005):
     s = bt.run(**full)
     trades = s._trades[[c for c in TRADE_COLS if c in s._trades]].copy()
     trades["Duration"] = trades["Duration"].astype(str)
+    stats = {k: _num(s[k]) for k in KEY_STATS}
+    stats["# Trades"] = int(s["# Trades"])
     return RunResult(
         params=full,
-        stats={k: _num(s[k]) for k in KEY_STATS},
+        stats=stats,
         trades=json.loads(trades.to_json(orient="records", date_format="iso")),
         equity=[[ts.isoformat(), float(v)] for ts, v in s._equity_curve["Equity"].items()],
         raw=s,
@@ -107,7 +109,7 @@ def values(lo, hi, step, default):
         return [False, True]
     if isinstance(default, int):
         return list(range(int(lo), int(hi) + 1, max(1, int(step))))
-    n = int(round((hi - lo) / step)) + 1 if step > 0 else 0
+    n = int((hi - lo) / step + 1e-9) + 1 if step > 0 else 0
     return [round(lo + i * step, 10) for i in range(n)]
 
 
@@ -136,7 +138,7 @@ class OptResult:
 
 def optimize(code, df, ranges, maximize="Sharpe Ratio", cash=1_000_000, commission=0.0005, max_tries=500):
     """ranges: {param: (min, max, step)}. Unlisted params keep their defaults.
-    Grids larger than max_tries are randomly sampled (seeded, so repeatable)."""
+    Grids larger than max_tries are randomly sampled down to about max_tries combinations (seeded, so repeatable)."""
     cls, defaults = load_strategy(code)
     grid = {k: values(*r, defaults[k]) for k, r in ranges.items()}
     if not grid or not all(grid.values()):
@@ -147,6 +149,8 @@ def optimize(code, df, ranges, maximize="Sharpe Ratio", cash=1_000_000, commissi
         return_heatmap=True, max_tries=max_tries if n > max_tries else None, random_state=0)
     results = (heat.rename(maximize).reset_index().dropna(subset=[maximize])
                .sort_values(maximize, ascending=False, ignore_index=True))
+    if results.empty:  # nothing traded: backtesting.py's fallback "best" would be a fake
+        return OptResult(results, {}, None)
     return OptResult(
         results=results,
         best_params={k: coerce(best._strategy._params[k], defaults[k]) for k in grid},

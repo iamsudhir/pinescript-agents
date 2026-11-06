@@ -29,7 +29,10 @@ def load_data(conn, ticker, interval, start, end):
     if not db.fetch_covered(conn, ticker, interval, start, end):
         db.upsert_bars(conn, ticker, interval, _download(ticker, interval, start, end))
         db.log_fetch(conn, ticker, interval, start, end)
-    return db.get_bars(conn, ticker, interval, start, end)
+    df = db.get_bars(conn, ticker, interval, start, end)
+    if df.empty:
+        raise DataError(f"No bars for {ticker} ({interval}) between {start} and {end}.")
+    return df
 
 
 def _download(ticker, interval, start, end):

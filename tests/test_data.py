@@ -1,3 +1,5 @@
+import datetime as dt
+
 import pandas as pd
 import pytest
 
@@ -41,3 +43,26 @@ def test_tz_aware_bars_keep_exchange_local_time(conn, monkeypatch):
 def test_default_start():
     assert data.default_start("1d") == "2015-01-01"
     assert data.default_start("15m") > "2015-01-01"
+
+
+def test_empty_cached_window_raises(conn, goog, monkeypatch):
+    monkeypatch.setattr(data.yf, "download", lambda ticker, start, end, interval, **kw: goog[(goog.index >= start) & (goog.index < end)])
+    data.load_data(conn, "GOOG", "1d", "2005-01-01", "2005-06-01")
+    with pytest.raises(data.DataError, match="No bars for GOOG"):
+        data.load_data(conn, "GOOG", "1d", "2005-01-08", "2005-01-10")  # Sat -> Mon
+
+
+def test_end_is_capped_at_today(conn, monkeypatch):
+    today = dt.date.today().isoformat()
+    calls = []
+    bars = pd.DataFrame({"Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5, "Volume": 10.0},
+                        index=pd.to_datetime(["2020-01-02", "2020-01-03"]))
+
+    def fake_download(ticker, start, end, interval, **kw):
+        calls.append(end)
+        return bars
+
+    monkeypatch.setattr(data.yf, "download", fake_download)
+    data.load_data(conn, "X", "1d", "2020-01-01", "2099-01-01")
+    data.load_data(conn, "X", "1d", "2020-01-01", today)
+    assert calls == [today]
