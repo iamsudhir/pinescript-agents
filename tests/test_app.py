@@ -18,3 +18,19 @@ def test_library_and_create_pages_render(tmp_path, monkeypatch):
     at.switch_page("ui/create.py").run()
     assert not at.exception
     assert [t.value for t in at.title] == ["Create a strategy"]
+
+
+def test_strategy_page_renders_all_tabs(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKBENCH_DB", str(tmp_path / "ui.db"))
+    monkeypatch.setenv("WORKBENCH_DRY_RUN", "1")
+    conn = db.connect()
+    sid = db.create_strategy(conn, "Smoke Test", "description", python_code=SMA_CODE, pine_code="//@version=6")
+    conn.close()
+
+    at = AppTest.from_file("../app.py", default_timeout=60).run()
+    at.session_state["strategy_id"] = sid
+    at.switch_page("ui/strategy.py").run()
+    assert not at.exception
+    assert at.title[0].value == "Smoke Test"
+    assert {t.label for t in at.tabs} == {"Code", "Backtest", "Optimize", "History", "Insights"}
+    assert {n.label for n in at.number_input} >= {"n1", "n2", "stop_pct"}
