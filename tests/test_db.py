@@ -101,3 +101,18 @@ def test_delete_cascades(conn):
     db.delete_strategy(conn, sid)
     for table in ("strategies", "strategy_versions", "runs", "optimizations", "insights"):
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_price_bars_roundtrip_and_fetch_log(conn, goog):
+    df = goog.iloc[:10]  # 2004-08-19 .. 2004-09-01
+    db.upsert_bars(conn, "GOOG", "1d", df)
+    db.upsert_bars(conn, "GOOG", "1d", df)  # idempotent
+    out = db.get_bars(conn, "GOOG", "1d", "2004-08-19", "2004-09-02")
+    assert list(out.columns) == db.BAR_COLS
+    assert list(out.index) == list(df.index)
+    assert (out.values == df.values.astype(float)).all()
+    assert len(db.get_bars(conn, "GOOG", "1d", "2004-08-20", "2004-09-01")) == 8  # end is exclusive
+    assert not db.fetch_covered(conn, "GOOG", "1d", "2004-08-19", "2004-09-02")
+    db.log_fetch(conn, "GOOG", "1d", "2004-08-19", "2004-09-02")
+    assert db.fetch_covered(conn, "GOOG", "1d", "2004-08-20", "2004-09-01")
+    assert not db.fetch_covered(conn, "GOOG", "1d", "2004-08-20", "2004-09-10")

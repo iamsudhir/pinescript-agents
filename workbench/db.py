@@ -282,3 +282,32 @@ def save_insight(conn, strategy_id, content, run_ids, optimization_ids, model):
 
 def list_insights(conn, strategy_id):
     return _all(conn, "SELECT * FROM insights WHERE strategy_id=? ORDER BY id DESC", (strategy_id,))
+
+
+# --- price cache --------------------------------------------------------------
+# Timestamps are stored as naive ISO strings in exchange-local time, so string
+# comparison against 'YYYY-MM-DD' dates works: ts >= start AND ts < end.
+
+def upsert_bars(conn, ticker, interval, df):
+    rows = [(ticker, interval, ts.isoformat(), *map(float, row))
+            for ts, row in zip(df.index, df[BAR_COLS].itertuples(index=False))]
+    with conn:
+        conn.executemany("INSERT OR REPLACE INTO price_bars VALUES (?,?,?,?,?,?,?,?)", rows)
+
+
+def get_bars(conn, ticker, interval, start, end):
+    rows = conn.execute("SELECT ts, open, high, low, close, volume FROM price_bars"
+                        " WHERE ticker=? AND interval=? AND ts>=? AND ts<? ORDER BY ts",
+                        (ticker, interval, start, end)).fetchall()
+    return pd.DataFrame([tuple(r)[1:] for r in rows], columns=BAR_COLS,
+                        index=pd.to_datetime([r[0] for r in rows]))
+
+
+def fetch_covered(conn, ticker, interval, start, end):
+    return conn.execute("SELECT 1 FROM price_fetches WHERE ticker=? AND interval=? AND start_date<=? AND end_date>=?",
+                        (ticker, interval, start, end)).fetchone() is not None
+
+
+def log_fetch(conn, ticker, interval, start, end):
+    with conn:
+        conn.execute("INSERT INTO price_fetches VALUES (?,?,?,?)", (ticker, interval, start, end))
