@@ -1,4 +1,5 @@
 """Load a generated strategy module and backtest / optimize it with backtesting.py."""
+import ast
 import json
 import math
 import os
@@ -17,6 +18,9 @@ KEY_STATS = ["Return [%]", "Buy & Hold Return [%]", "CAGR [%]", "Sharpe Ratio", 
 MAXIMIZE = ["Sharpe Ratio", "Return [%]", "Return/MaxDD"]
 TRADE_COLS = ["Size", "EntryTime", "ExitTime", "EntryPrice", "ExitPrice", "SL", "TP", "PnL", "ReturnPct", "Duration"]
 _MODULE = "workbench_strategy"
+ALLOWED_IMPORTS = {"numpy", "pandas", "math", "backtesting"}
+BANNED_NAMES = {"open", "exec", "eval", "compile", "__import__", "input", "breakpoint", "globals", "locals",
+                "getattr", "setattr", "delattr", "vars"}
 
 
 class StrategyContractError(Exception):
@@ -25,12 +29,24 @@ class StrategyContractError(Exception):
 
 def load_strategy(code):
     """Exec strategy code; return (its single Strategy subclass, {param: default})."""
-    # ponytail: runs in-process with no sandbox. Fine for code from your own Claude account;
-    # move to a subprocess before ever loading strategies from other people.
+    # ponytail: runs in-process with no sandbox. The checks below only stop obvious I/O and dynamic
+    # code in what Claude generates (transcripts are third-party input); they are not a sandbox.
+    # Move to a subprocess before ever loading strategies from other people.
     ns = {"__name__": _MODULE}
     try:
-        exec(compile(code, "strategy.py", "exec"), ns)
-    except Exception as e:
+        tree = ast.parse(code, "strategy.py")
+        for node in ast.walk(tree):
+            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                    else [node.module or ""] if isinstance(node, ast.ImportFrom) and not node.level else [])
+            for m in mods:
+                if m.split(".")[0] not in ALLOWED_IMPORTS:
+                    raise ImportError(f"import of {m!r} is not allowed (only {sorted(ALLOWED_IMPORTS)})")
+            if isinstance(node, ast.ImportFrom) and node.level:
+                raise ImportError("relative imports are not allowed")
+            if isinstance(node, ast.Name) and node.id in BANNED_NAMES:
+                raise NameError(f"{node.id}() is not allowed")
+        exec(compile(tree, "strategy.py", "exec"), ns)
+    except (Exception, SystemExit) as e:
         raise StrategyContractError(f"strategy.py failed to load: {type(e).__name__}: {e}") from e
     classes = [c for c in ns.values()
                if isinstance(c, type) and issubclass(c, Strategy) and c.__module__ == _MODULE]

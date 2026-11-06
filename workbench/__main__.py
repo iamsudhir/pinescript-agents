@@ -9,7 +9,17 @@ from . import actions, data, db, engine, generate, insights
 
 
 def _pairs(items):
+    bad = [i for i in items if "=" not in i]
+    if bad:
+        sys.exit(f"error: expected NAME=VALUE, got {bad[0]!r}")
     return dict(item.split("=", 1) for item in items)
+
+
+def _range(text):
+    parts = text.split(":")
+    if len(parts) != 3:
+        sys.exit(f"error: range must be MIN:MAX:STEP, got {text!r}")
+    return tuple(float(x) for x in parts)
 
 
 def _strategy(conn, slug):
@@ -50,30 +60,40 @@ def main(argv=None):
     sub.add_parser("analyze", help="ask Claude to analyze the results").add_argument("slug")
     a = p.parse_args(argv)
     conn = db.connect()
+    try:
+        _dispatch(a, conn)
+    except (generate.GenerationError, data.DataError, engine.StrategyContractError, ValueError, KeyError,
+            OSError) as e:
+        sys.exit(f"error: {e}")
 
+
+def _dispatch(a, conn):
     if a.cmd == "list":
         for r in db.list_strategies(conn, status=a.status):
             ret = (r["latest_stats"] or {}).get("Return [%]")
             print(f'{r["slug"]:40} {r["status"]:10} runs={r["n_runs"]:<4} '
                   f'last return={"-" if ret is None else f"{ret:.2f}%"}')
     elif a.cmd == "new":
-        gen = generate.from_youtube(a.url) if a.url else generate.from_description(a.desc)
-        sid = actions.create_from(conn, gen, "youtube" if a.url else "description")
+        gen = generate.from_youtube(a.url) if a.url is not None else generate.from_description(a.desc)
+        sid = actions.create_from(conn, gen, "youtube" if a.url is not None else "description")
         print("created", db.get_strategy(conn, sid)["slug"])
     elif a.cmd == "import":
         done = db.sources(conn, "pine_import")
         for path in sorted(a.path.glob("*.pine")) if a.path.is_dir() else [a.path]:
             if actions.rel(path) in done:
                 print("skip (already imported)", path.name)
-            else:
+                continue
+            try:
                 print("imported", db.get_strategy(conn, actions.import_pine(conn, path))["slug"])
+            except (generate.GenerationError, engine.StrategyContractError, ValueError, OSError) as e:
+                print(f"failed {path.name}: {e}")
     elif a.cmd == "run":
         s = _strategy(conn, a.slug)
         rid, res = actions.backtest(conn, db.latest_version(conn, s["id"])["id"], _market(a, s), _pairs(a.param))
         print(json.dumps({"run_id": rid, "params": res.params, **res.stats}, indent=2))
     elif a.cmd == "optimize":
         s = _strategy(conn, a.slug)
-        ranges = {k: tuple(float(x) for x in v.split(":")) for k, v in _pairs(a.range).items()}
+        ranges = {k: _range(v) for k, v in _pairs(a.range).items()}
         oid, res = actions.optimize(conn, db.latest_version(conn, s["id"])["id"], _market(a, s), ranges, a.maximize)
         print(res.results.head(20).to_string(index=False))
         print(f"optimization_id={oid} best={res.best_params}")

@@ -26,9 +26,11 @@ def summary(conn, strategy_id):
                             **{c: r["stats"].get(c) for c in (RET, SHARPE, DD)}} for r in runs])
         df[[RET, SHARPE, DD]] = df[[RET, SHARPE, DD]].astype(float)
         by_market = (df.groupby(["ticker", "interval"])
-                     .agg(runs=("run_id", "count"), pct_profitable=(RET, lambda x: 100 * (x > 0).mean()),
+                     .agg(runs=("run_id", "count"),
+                          pct_profitable=(RET, lambda x: 100 * (x.dropna() > 0).mean() if x.notna().any() else None),
                           avg_return=(RET, "mean"), avg_sharpe=(SHARPE, "mean"))
                      .reset_index())
+        by_market = by_market.astype(object).where(by_market.notna(), None)  # NaN -> None: JSON-safe
         out.update(
             best_by_return=_pick(df, RET), worst_by_return=_pick(df, RET, largest=False),
             best_by_sharpe=_pick(df, SHARPE),
@@ -61,6 +63,8 @@ def analyze(conn, strategy_id, run_ids=None):
     s = db.get_strategy(conn, strategy_id)
     runs = db.list_runs(conn, strategy_id)
     runs = [r for r in runs if r["id"] in run_ids] if run_ids else runs[:20]
+    if not runs:
+        raise ValueError("No runs to analyze yet — run a backtest first.")
     opts = [db.get_optimization(conn, o["id"]) for o in db.list_optimizations(conn, strategy_id)[:1]]
     payload = {
         "strategy": s["name"],

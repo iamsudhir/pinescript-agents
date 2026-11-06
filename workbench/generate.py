@@ -8,11 +8,8 @@ import re
 from dataclasses import dataclass, field
 
 import anthropic
-from dotenv import load_dotenv
 
 from . import ROOT
-
-load_dotenv(ROOT / ".env")
 
 # Models that accept server-side refusal fallbacks (fallbacks="default").
 FALLBACK_PREFIXES = ("claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1")
@@ -188,7 +185,12 @@ def _call(user, schema=SCHEMA, system=None):
         raise GenerationError(f"Claude declined this request (category: {category}).")
     if msg.stop_reason == "max_tokens":
         raise GenerationError("Claude's answer was cut off (max_tokens). Try a shorter input.")
-    text = "".join(b.text for b in msg.content if b.type == "text")
+    if msg.stop_reason != "end_turn":
+        raise GenerationError(f"Claude stopped unexpectedly ({msg.stop_reason}). Try again.")
+    # After a server-side fallback the content is [declining model's text, "fallback" block, fallback
+    # model's text]: only the text after the last fallback block is the answer.
+    start = max((i for i, b in enumerate(msg.content) if b.type == "fallback"), default=-1) + 1
+    text = "".join(b.text for b in msg.content[start:] if b.type == "text")
     return json.loads(text) if schema else text
 
 
@@ -201,8 +203,13 @@ def _generate(user, schema=SCHEMA):
     try:
         load_strategy(out["python"])
     except StrategyContractError as e:
-        out = _call(f"{user}\n\nYour previous answer's Python failed the contract check:\n{e}\n"
-                    "Return the complete corrected answer.", schema)
+        try:
+            retry = _call(f"{user}\n\nYour previous Python:\n```python\n{out['python']}\n```\n"
+                          f"It failed the contract check:\n{e}\nReturn the complete corrected answer.", schema)
+        except (GenerationError, anthropic.APIError, ValueError) as e2:
+            out["notes"] = [*out["notes"], f"Python fails the contract check ({e}); automatic retry failed: {e2}"]
+            return out
+        out = retry
         try:
             load_strategy(out["python"])
         except StrategyContractError as e2:
@@ -220,12 +227,17 @@ def fetch_transcript(url):
         # Its paths are relative to the repo root; pin them so the app works from any folder.
         va_mod.CACHE_DIR = ROOT / "projects" / "analysis" / ".cache"
         va_mod.ANALYSIS_DIR = ROOT / "projects" / "analysis"
-        va_mod.STATUS_FILE = ROOT / ".claude" / ".video_status"
+        va_mod.set_status = lambda message: None  # no status-file side effects
+        va_mod.clear_status = lambda: None
         va = va_mod.VideoAnalyzer()
+        if importlib.util.find_spec("whisper") is None:  # the analyzer would pip install it silently
+            va.get_transcript_from_whisper = lambda url: (None, "no captions and Whisper is not installed")
         video_id = va.extract_video_id(url)
         if not video_id:
             raise GenerationError(f"Not a YouTube video URL: {url}")
-        title = va.get_video_metadata(url).get("title", video_id)
+        title = va.get_video_metadata(url).get("title")
+        if not title or title == "Unknown":
+            title = video_id
         transcript, source = va.get_transcript(url, video_id)
     if not transcript:
         raise GenerationError(f"Couldn't get a transcript ({source}). Install Whisper "

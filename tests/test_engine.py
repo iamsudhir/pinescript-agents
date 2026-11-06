@@ -86,3 +86,27 @@ def test_optimize_samples_large_grids(goog):
     res = engine.optimize(SMA_CODE, goog, {"n1": (5, 15, 5), "use_exit": (0, 1, 1)}, max_tries=3)
     assert 0 < len(res.results) <= 6
     assert set(res.best_params) == {"n1", "use_exit"}
+
+
+@pytest.mark.parametrize("code", [
+    "import os",
+    "from subprocess import run",
+    "import numpy as np\nimport socket",
+    "x = open('f')",
+    "exec('1')",
+    "y = getattr(int, 'real')",
+])
+def test_load_strategy_rejects_io_and_dynamic_code(code):
+    with pytest.raises(engine.StrategyContractError, match="not allowed"):
+        engine.load_strategy(code)
+
+
+def test_load_strategy_still_accepts_reference_code():
+    from workbench import generate
+    engine.load_strategy(generate.REFERENCE_PY)
+    engine.load_strategy("import math\nimport pandas as pd\nimport numpy as np\n" + SMA_CODE)
+
+
+def test_load_strategy_wraps_system_exit():
+    with pytest.raises(engine.StrategyContractError, match="failed to load"):
+        engine.load_strategy("raise SystemExit(1)")
