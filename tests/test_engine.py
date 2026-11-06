@@ -43,3 +43,33 @@ def test_params_change_the_result(goog):
 
 def test_chart_html(goog):
     assert "<html" in engine.chart_html(engine.run(SMA_CODE, goog)).lower()
+
+
+def test_values_and_grid_size():
+    assert engine.values(5, 15, 5, 10) == [5, 10, 15]
+    assert engine.values(0.5, 1.0, 0.25, 1.0) == [0.5, 0.75, 1.0]
+    assert engine.values(0, 1, 1, True) == [False, True]
+    assert engine.values(10, 5, 1, 3) == []
+    assert engine.grid_size({"n1": (5, 15, 5), "use_exit": (0, 1, 1)}, {"n1": 10, "use_exit": True}) == 6
+    assert engine.grid_size({}, {"n1": 10}) == 0
+
+
+def test_default_range():
+    assert engine.default_range(10) == (5, 20, 2)
+    assert engine.default_range(0) == (0, 10, 1)
+    assert engine.default_range(2.0) == (1.0, 4.0, 0.2)
+
+
+def test_optimize_returns_one_row_per_combination(goog):
+    res = engine.optimize(SMA_CODE, goog, {"n1": (5, 15, 5), "use_exit": (0, 1, 1)}, maximize="Return/MaxDD")
+    assert list(res.results.columns) == ["n1", "use_exit", "Return/MaxDD"]
+    assert 0 < len(res.results) <= 6
+    assert res.results["Return/MaxDD"].is_monotonic_decreasing
+    assert res.best_value == res.results["Return/MaxDD"].iloc[0]
+    assert set(res.best_params) == {"n1", "use_exit"}
+    assert type(res.best_params["n1"]) is int and type(res.best_params["use_exit"]) is bool
+
+
+def test_optimize_rejects_empty_range(goog):
+    with pytest.raises(ValueError, match="at least one value"):
+        engine.optimize(SMA_CODE, goog, {"n1": (10, 5, 1)})

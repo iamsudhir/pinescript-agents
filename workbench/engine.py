@@ -99,3 +99,56 @@ def chart_html(result):
             return f.read()
     finally:
         os.remove(path)
+
+
+def values(lo, hi, step, default):
+    """Grid values for one parameter, typed like its default. Bools always try both."""
+    if isinstance(default, bool):
+        return [False, True]
+    if isinstance(default, int):
+        return list(range(int(lo), int(hi) + 1, max(1, int(step))))
+    n = int(round((hi - lo) / step)) + 1 if step > 0 else 0
+    return [round(lo + i * step, 10) for i in range(n)]
+
+
+def grid_size(ranges, defaults):
+    return math.prod(len(values(*r, defaults[k])) for k, r in ranges.items()) if ranges else 0
+
+
+def default_range(d):
+    """Starting (min, max, step) offered in the UI for a parameter's default value."""
+    if isinstance(d, int):
+        return (d // 2, d * 2, max(1, d // 5)) if d > 0 else (0, 10, 1)
+    return (d / 2, d * 2, round(d / 10, 10)) if d > 0 else (0.0, 1.0, 0.1)
+
+
+def return_over_maxdd(stats):
+    dd = abs(stats["Max. Drawdown [%]"])
+    return stats["Return [%]"] / dd if dd else float("nan")
+
+
+@dataclass
+class OptResult:
+    results: pd.DataFrame  # one row per tried combination: params + the maximized metric, best first
+    best_params: dict
+    best_value: float | None
+
+
+def optimize(code, df, ranges, maximize="Sharpe Ratio", cash=1_000_000, commission=0.0005, max_tries=500):
+    """ranges: {param: (min, max, step)}. Unlisted params keep their defaults.
+    Grids larger than max_tries are randomly sampled (seeded, so repeatable)."""
+    cls, defaults = load_strategy(code)
+    grid = {k: values(*r, defaults[k]) for k, r in ranges.items()}
+    if not grid or not all(grid.values()):
+        raise ValueError(f"Every optimized parameter needs at least one value: {grid}")
+    n = math.prod(len(v) for v in grid.values())
+    best, heat = _backtest(cls, df, cash, commission).optimize(
+        **grid, maximize=return_over_maxdd if maximize == "Return/MaxDD" else maximize,
+        return_heatmap=True, max_tries=max_tries if n > max_tries else None, random_state=0)
+    results = (heat.rename(maximize).reset_index().dropna(subset=[maximize])
+               .sort_values(maximize, ascending=False, ignore_index=True))
+    return OptResult(
+        results=results,
+        best_params={k: coerce(best._strategy._params[k], defaults[k]) for k in grid},
+        best_value=_num(results[maximize].iloc[0]) if len(results) else None,
+    )
