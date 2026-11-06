@@ -16,3 +16,11 @@ youtube-transcript-api>=0.6.0
 # macOS: brew install ffmpeg
 # Ubuntu: sudo apt install ffmpeg
 # Windows: Download from https://ffmpeg.org/download.html
+
+# Strategy workbench (streamlit run app.py)
+streamlit>=1.67
+anthropic>=2.6
+yfinance>=1.8
+backtesting>=0.6.6
+python-dotenv>=1.2
+pytest>=9.0

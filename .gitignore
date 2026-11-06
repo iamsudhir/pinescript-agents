@@ -53,3 +53,7 @@ temp/
 .venv/
 __pycache__/
 *.pyc
+
+# Strategy workbench database (SQLite + WAL files)
+workbench.db*
+.pytest_cache/
