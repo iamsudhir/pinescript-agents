@@ -42,3 +42,62 @@ def test_update_rejects_unknown_fields(conn):
     except ValueError:
         return
     raise AssertionError("expected ValueError")
+
+
+from conftest import MARKET
+
+
+def _run(conn, vid, ret=5.0):
+    return db.save_run(conn, vid, MARKET, {"n1": 5}, {"Return [%]": ret, "Sharpe Ratio": 1.2},
+                       [{"PnL": 1.0}], [["2020-01-01T00:00:00", 100000.0]])
+
+
+def test_runs_roundtrip_and_library_summary(conn):
+    sid = db.create_strategy(conn, "S", "description")
+    vid = db.latest_version(conn, sid)["id"]
+    _run(conn, vid, 1.0)
+    rid = _run(conn, vid, 5.0)
+    run = db.get_run(conn, rid)
+    assert run["trades"] == [{"PnL": 1.0}] and run["params"] == {"n1": 5}
+    assert (run["strategy_id"], run["version"], run["ticker"], run["start_date"]) == (sid, 1, "GOOG", "2004-08-19")
+    db.set_note(conn, "runs", rid, "good on GOOG")
+    runs = db.list_runs(conn, sid)
+    assert [r["id"] for r in runs][0] == rid and runs[0]["note"] == "good on GOOG"
+    assert "trades" not in runs[0]
+    row = db.list_strategies(conn)[0]
+    assert row["n_runs"] == 2 and row["latest_stats"]["Return [%]"] == 5.0
+
+
+def test_optimizations_and_insights(conn):
+    sid = db.create_strategy(conn, "S", "description")
+    vid = db.latest_version(conn, sid)["id"]
+    oid = db.save_optimization(conn, vid, MARKET, {"n1": [5, 15, 5]}, "Sharpe Ratio",
+                               [{"n1": 10, "Sharpe Ratio": 1.5}], {"n1": 10}, 1.5)
+    o = db.get_optimization(conn, oid)
+    assert o["results"] == [{"n1": 10, "Sharpe Ratio": 1.5}] and o["best_params"] == {"n1": 10}
+    assert db.list_optimizations(conn, sid)[0]["best_value"] == 1.5
+    assert (db.list_strategies(conn)[0]["opt_maximize"], db.list_strategies(conn)[0]["opt_best"]) == ("Sharpe Ratio", 1.5)
+    db.set_note(conn, "optimizations", oid, "sharp peak")
+    assert db.get_optimization(conn, oid)["note"] == "sharp peak"
+    iid = db.save_insight(conn, sid, "## Where it works", [1], [oid], "claude-opus-5-5")
+    assert db.list_insights(conn, sid)[0]["id"] == iid
+    assert db.list_insights(conn, sid)[0]["optimization_ids"] == [oid]
+
+
+def test_set_note_rejects_other_tables(conn):
+    try:
+        db.set_note(conn, "strategies", 1, "x")
+    except ValueError:
+        return
+    raise AssertionError("expected ValueError")
+
+
+def test_delete_cascades(conn):
+    sid = db.create_strategy(conn, "S", "description")
+    vid = db.latest_version(conn, sid)["id"]
+    _run(conn, vid)
+    db.save_optimization(conn, vid, MARKET, {}, "Sharpe Ratio", [], {}, None)
+    db.save_insight(conn, sid, "x", [], [], "m")
+    db.delete_strategy(conn, sid)
+    for table in ("strategies", "strategy_versions", "runs", "optimizations", "insights"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0

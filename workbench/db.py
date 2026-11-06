@@ -212,3 +212,73 @@ def get_version(conn, version_id):
 def latest_version(conn, strategy_id):
     return _one(conn, "SELECT * FROM strategy_versions WHERE strategy_id=? ORDER BY version DESC LIMIT 1",
                 (strategy_id,))
+
+
+# --- runs, optimizations, insights --------------------------------------------
+# `market` is a dict with the keys in MARKET: ticker, interval, start, end ('YYYY-MM-DD'), cash, commission.
+
+_RUN = ("r.id, r.strategy_version_id, v.version, v.strategy_id, r.ticker, r.interval, r.start_date,"
+        " r.end_date, r.cash, r.commission, r.params, r.stats, r.note, r.created_at")
+_OPT = ("o.id, o.strategy_version_id, v.version, v.strategy_id, o.ticker, o.interval, o.start_date,"
+        " o.end_date, o.cash, o.commission, o.ranges, o.maximize, o.best_params, o.best_value, o.note, o.created_at")
+NOTE_TABLES = {"runs", "optimizations"}
+
+
+def save_run(conn, version_id, market, params, stats, trades, equity):
+    with conn:
+        return conn.execute(
+            "INSERT INTO runs(strategy_version_id, ticker, interval, start_date, end_date, cash, commission,"
+            " params, stats, trades, equity, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (version_id, *(market[k] for k in MARKET), json.dumps(params), json.dumps(stats),
+             json.dumps(trades), json.dumps(equity), now())).lastrowid
+
+
+def list_runs(conn, strategy_id):
+    """Newest first, without the bulky trades/equity columns."""
+    return _all(conn, f"SELECT {_RUN} FROM runs r JOIN strategy_versions v ON v.id = r.strategy_version_id"
+                      " WHERE v.strategy_id=? ORDER BY r.id DESC", (strategy_id,))
+
+
+def get_run(conn, run_id):
+    return _one(conn, f"SELECT {_RUN}, r.trades, r.equity FROM runs r"
+                      " JOIN strategy_versions v ON v.id = r.strategy_version_id WHERE r.id=?", (run_id,))
+
+
+def save_optimization(conn, version_id, market, ranges, maximize, results, best_params, best_value):
+    with conn:
+        return conn.execute(
+            "INSERT INTO optimizations(strategy_version_id, ticker, interval, start_date, end_date, cash,"
+            " commission, ranges, maximize, results, best_params, best_value, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (version_id, *(market[k] for k in MARKET), json.dumps(ranges), maximize, json.dumps(results),
+             json.dumps(best_params), best_value, now())).lastrowid
+
+
+def list_optimizations(conn, strategy_id):
+    """Newest first, without the per-combination results."""
+    return _all(conn, f"SELECT {_OPT} FROM optimizations o JOIN strategy_versions v ON v.id = o.strategy_version_id"
+                      " WHERE v.strategy_id=? ORDER BY o.id DESC", (strategy_id,))
+
+
+def get_optimization(conn, opt_id):
+    return _one(conn, f"SELECT {_OPT}, o.results FROM optimizations o"
+                      " JOIN strategy_versions v ON v.id = o.strategy_version_id WHERE o.id=?", (opt_id,))
+
+
+def set_note(conn, table, row_id, note):
+    if table not in NOTE_TABLES:
+        raise ValueError(f"notes live on {sorted(NOTE_TABLES)}, not {table}")
+    with conn:
+        conn.execute(f"UPDATE {table} SET note=? WHERE id=?", (note, row_id))
+
+
+def save_insight(conn, strategy_id, content, run_ids, optimization_ids, model):
+    with conn:
+        return conn.execute(
+            "INSERT INTO insights(strategy_id, content, run_ids, optimization_ids, model, created_at)"
+            " VALUES (?,?,?,?,?,?)",
+            (strategy_id, content, json.dumps(run_ids), json.dumps(optimization_ids), model, now())).lastrowid
+
+
+def list_insights(conn, strategy_id):
+    return _all(conn, "SELECT * FROM insights WHERE strategy_id=? ORDER BY id DESC", (strategy_id,))
