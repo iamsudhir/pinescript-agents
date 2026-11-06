@@ -56,3 +56,46 @@ def _num(v):
     except (TypeError, ValueError):
         return None
     return v if math.isfinite(v) else None
+
+
+@dataclass
+class RunResult:
+    params: dict          # full parameter set used (defaults + overrides)
+    stats: dict           # KEY_STATS -> float or None
+    trades: list          # JSON-ready trade records
+    equity: list          # [[iso_ts, equity], ...]
+    raw: pd.Series        # backtesting.py result, for charting
+    bt: Backtest
+
+
+def _backtest(cls, df, cash, commission):
+    return Backtest(df, cls, cash=cash, commission=commission, finalize_trades=True)
+
+
+def run(code, df, params=None, cash=1_000_000, commission=0.0005):
+    cls, defaults = load_strategy(code)
+    full = {**defaults, **{k: coerce(v, defaults[k]) for k, v in (params or {}).items() if k in defaults}}
+    bt = _backtest(cls, df, cash, commission)
+    s = bt.run(**full)
+    trades = s._trades[[c for c in TRADE_COLS if c in s._trades]].copy()
+    trades["Duration"] = trades["Duration"].astype(str)
+    return RunResult(
+        params=full,
+        stats={k: _num(s[k]) for k in KEY_STATS},
+        trades=json.loads(trades.to_json(orient="records", date_format="iso")),
+        equity=[[ts.isoformat(), float(v)] for ts, v in s._equity_curve["Equity"].items()],
+        raw=s,
+        bt=bt,
+    )
+
+
+def chart_html(result):
+    """backtesting.py's interactive Bokeh chart for a run, as an HTML string."""
+    fd, path = tempfile.mkstemp(suffix=".html")
+    os.close(fd)
+    try:
+        result.bt.plot(results=result.raw, filename=path, open_browser=False)
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    finally:
+        os.remove(path)
