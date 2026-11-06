@@ -11,9 +11,11 @@ Turn this repo from "Claude writes Pine in a chat" into a local framework where 
    (pasted manually into TradingView) **and** an equivalent Python strategy.
 2. Backtest the Python strategy on yfinance data, any time, on any ticker/interval/date range.
 3. Tune the strategy's parameters from a UI: single runs with chosen values, and grid optimization.
-4. Keep everything (strategies, code versions, price data, runs, optimization results) in a
-   database for later use.
-5. Import the ~30 existing `projects/*.pine` scripts into the same library.
+4. Keep everything (strategies, code versions, price data, every run, every optimization,
+   insights) in a database for later use — nothing is ever overwritten.
+5. Build up insights per strategy: Claude's analysis of its results, your own notes,
+   auto-computed summary stats, and a status/rating to triage the library.
+6. Import the ~30 existing `projects/*.pine` scripts into the same library.
 
 ## Decisions
 
@@ -23,7 +25,7 @@ Turn this repo from "Claude writes Pine in a chat" into a local framework where 
 | UI | Streamlit, local (`streamlit run app.py`) |
 | Data | yfinance now; Dhan later behind the same `load_data()` function |
 | Backtest engine | `backtesting.py` (`Backtest.run`, `Backtest.optimize`) |
-| Persistence | SQLite, single file `workbench.db` (stdlib `sqlite3`, no ORM) |
+| Persistence | SQLite database `workbench.db` (stdlib `sqlite3`, no ORM, no server). One DB holds all strategies, versions, runs, optimizations, insights and price cache as separate rows/tables |
 | Out of scope | Dhan data, live/paper trading, batch URL processing, walk-forward, portfolio backtests |
 
 ## Architecture
@@ -34,6 +36,7 @@ app.py  (Streamlit UI only — no business logic)
   ├── workbench/generate.py   URL/description/.pine → Claude API → {pine, python, notes}
   │       └── reuses tools/video-analyzer.py (VideoAnalyzer) for transcript + metadata
   ├── workbench/engine.py     load strategy class from source, list params, run(), optimize()
+  ├── workbench/insights.py   auto summary stats (computed) + Claude analysis of results (stored)
   ├── workbench/data.py       load_data(ticker, interval, start, end) with DB cache (yfinance)
   └── workbench/db.py         all SQLite reads/writes; schema creation; nothing else
 
@@ -56,6 +59,9 @@ strategies(
   notes TEXT,                        -- Claude's translation caveats (JSON list)
   default_ticker TEXT DEFAULT '^NSEI',
   default_interval TEXT DEFAULT '1d',
+  status TEXT NOT NULL DEFAULT 'idea', -- idea | testing | promising | rejected | live
+  rating INTEGER,                    -- 1..5, NULL = unrated
+  user_notes TEXT,                   -- your free-text notes (markdown)
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )
@@ -81,6 +87,7 @@ runs(
   stats TEXT NOT NULL,               -- JSON of key stats (see below)
   trades TEXT NOT NULL,              -- JSON records of backtesting.py _trades
   equity TEXT NOT NULL,              -- JSON [[iso_ts, equity], ...]
+  note TEXT,                         -- your note on this specific run
   created_at TEXT NOT NULL
 )
 
@@ -94,6 +101,17 @@ optimizations(
   maximize TEXT NOT NULL,            -- 'Return [%]' | 'Sharpe Ratio' | 'Return/MaxDD'
   results TEXT NOT NULL,             -- JSON records: one row per combination (params + key stats)
   best_params TEXT NOT NULL,         -- JSON
+  note TEXT,
+  created_at TEXT NOT NULL
+)
+
+insights(                            -- Claude analyses; every analysis kept, newest shown first
+  id INTEGER PRIMARY KEY,
+  strategy_id INTEGER NOT NULL REFERENCES strategies(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,             -- markdown from Claude
+  run_ids TEXT NOT NULL,             -- JSON list of runs included in the analysis
+  optimization_ids TEXT NOT NULL,    -- JSON list
+  model TEXT NOT NULL,
   created_at TEXT NOT NULL
 )
 
@@ -128,6 +146,20 @@ version + params on cached bars (deterministic and fast). PRAGMA `foreign_keys=O
 `StrategyContractError` with a readable message (shown in UI, usable by "Fix with Claude").
 
 ## Components
+
+### `workbench/insights.py`
+- `summary(strategy_id) -> dict` — computed on demand from `runs`/`optimizations` (not stored,
+  so always current): run count; best and worst run (by Return and by Sharpe); mean/median
+  Sharpe, Return, MaxDD across runs; per-ticker and per-interval table (runs, % profitable,
+  avg Return, avg Sharpe); parameter stability from the latest optimization (share of
+  combinations within 80% of the best metric, and the best metric's neighbours — a sharp
+  lone peak is flagged as likely overfit).
+- `analyze(strategy_id, run_ids=None) -> insight_id` — sends Claude the strategy's Python
+  code, Claude's translation notes, your notes, `summary()`, and the selected runs'
+  stats (default: last 20 runs + latest optimization's top 20 rows; trades/equity are
+  summarised, not sent raw). Asks for markdown with fixed sections: *Where it works*,
+  *Where it fails*, *Overfitting risk*, *Pine vs Python differences to check*,
+  *Next experiments* (concrete ticker/interval/param suggestions). Saved to `insights`.
 
 ### `workbench/data.py`
 `load_data(ticker, interval, start, end) -> DataFrame[Open, High, Low, Close, Volume]`
@@ -167,8 +199,9 @@ Sidebar navigation: **Create**, **Library**, **Strategy**.
 
 1. **Create** — tabs: *YouTube URL* | *Description* | *Import .pine* (picker over `projects/*.pine`,
    plus "Import all" with progress). Generate → saves strategy v1 → opens it in Strategy page.
-2. **Library** — table: name, source type, created, latest run Return/Sharpe/MaxDD, best
-   optimization metric; search box; delete with confirm.
+2. **Library** — table: name, status, rating, source type, created, # runs, latest run
+   Return/Sharpe/MaxDD, best optimization metric; search box; filter by status and min rating;
+   delete with confirm.
 3. **Strategy** (selected strategy) — tabs:
    - **Code**: Pine and Python editors (`st.text_area`, monospace), Save → new version,
      version selector, copy/download buttons, **Fix with Claude** (pre-filled with last error).
@@ -179,10 +212,16 @@ Sidebar navigation: **Create**, **Library**, **Strategy**.
      sortable results table, heatmap when exactly 2 params, "Use these params" → Backtest tab.
      Saved to `optimizations`.
    - **History**: runs and optimizations for this strategy (all versions), multi-select runs to
-     compare stats side by side, reopen any run (loads its params + version into Backtest).
+     compare stats side by side, editable note per run/optimization, reopen any run (loads its
+     params + version into Backtest).
+   - **Insights**: status selector + 1–5 rating + your notes (markdown, saved on change);
+     auto summary from `insights.summary()` (cards + per-ticker/interval table);
+     **Analyze with Claude** (optionally pick which runs to include) → new analysis;
+     list of past analyses, newest first, each dated with the runs it covered.
 
 ### CLI (`python -m workbench`)
-- `list`
+- `list [--status promising]`
+- `analyze <slug>` (Claude insight) / `summary <slug>`
 - `run <slug> [--ticker --interval --start --end] [--param name=value ...]`
 - `optimize <slug> --range name=min:max:step ... [--maximize ...]`
 - `new --url URL | --desc TEXT`
@@ -204,7 +243,9 @@ and a temp DB:
 - `load_strategy` finds params; rejects code with zero/two Strategy classes.
 - `run` returns stats with expected keys; a known SMA-cross on the fixture gives a stable trade count.
 - `optimize` returns one row per combination and a best_params dict.
-- db round-trip: create strategy → add version → save run → list shows summary; cascade delete.
+- db round-trip: create strategy → add version → save run → list shows summary; cascade delete
+  removes versions, runs, optimizations and insights.
+- `insights.summary` on three saved runs over two tickers gives correct per-ticker counts and best run.
 - `data.load_data` with yfinance monkeypatched: second call hits the cache only for the cached range.
 
 Claude API calls are not unit-tested; `generate.py` has a `--dry-run` path that returns the
