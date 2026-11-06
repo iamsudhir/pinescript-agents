@@ -72,7 +72,8 @@ CREATE TABLE IF NOT EXISTS price_bars(
     PRIMARY KEY(ticker, interval, ts)
 );
 CREATE TABLE IF NOT EXISTS price_fetches(
-    ticker TEXT NOT NULL, interval TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL
+    ticker TEXT NOT NULL, interval TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL,
+    PRIMARY KEY(ticker, interval, start_date, end_date)
 );
 CREATE INDEX IF NOT EXISTS runs_by_version ON runs(strategy_version_id);
 CREATE INDEX IF NOT EXISTS opts_by_version ON optimizations(strategy_version_id);
@@ -115,7 +116,7 @@ def _one(conn, sql, args=()):
 # --- strategies ---------------------------------------------------------------
 
 def slugify(name):
-    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:60] or "strategy"
+    return re.sub(r"[^a-z0-9]+", "-", name.lower())[:60].strip("-") or "strategy"
 
 
 def create_strategy(conn, name, source_type, source=None, transcript=None, notes=None,
@@ -131,7 +132,7 @@ def create_strategy(conn, name, source_type, source=None, transcript=None, notes
             "INSERT INTO strategies(slug, name, source_type, source, transcript, notes, created_at, updated_at)"
             " VALUES (?,?,?,?,?,?,?,?)",
             (slug, name, source_type, source, transcript, json.dumps(notes or []), ts, ts)).lastrowid
-    add_version(conn, sid, pine_code, python_code, change_note)
+        _insert_version(conn, sid, pine_code, python_code, change_note)
     return sid
 
 
@@ -139,6 +140,8 @@ def update_strategy(conn, strategy_id, **fields):
     bad = set(fields) - UPDATABLE
     if bad:
         raise ValueError(f"cannot update {sorted(bad)}")
+    if not fields:
+        return
     if "notes" in fields:
         fields["notes"] = json.dumps(fields["notes"])
     sets = ", ".join(f"{k}=?" for k in fields)
@@ -188,16 +191,22 @@ def list_strategies(conn, status=None, min_rating=None, search=None):
 
 # --- versions -----------------------------------------------------------------
 
+def _insert_version(conn, strategy_id, pine_code, python_code, change_note):
+    """Caller owns the transaction (`with conn:`)."""
+    ts = now()
+    version = conn.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM strategy_versions WHERE strategy_id=?",
+                           (strategy_id,)).fetchone()[0]
+    vid = conn.execute(
+        "INSERT INTO strategy_versions(strategy_id, version, pine_code, python_code, change_note, created_at)"
+        " VALUES (?,?,?,?,?,?)",
+        (strategy_id, version, pine_code, python_code, change_note, ts)).lastrowid
+    conn.execute("UPDATE strategies SET updated_at=? WHERE id=?", (ts, strategy_id))
+    return vid
+
+
 def add_version(conn, strategy_id, pine_code, python_code, change_note):
     with conn:
-        version = conn.execute("SELECT COALESCE(MAX(version), 0) + 1 FROM strategy_versions WHERE strategy_id=?",
-                               (strategy_id,)).fetchone()[0]
-        vid = conn.execute(
-            "INSERT INTO strategy_versions(strategy_id, version, pine_code, python_code, change_note, created_at)"
-            " VALUES (?,?,?,?,?,?)",
-            (strategy_id, version, pine_code, python_code, change_note, now())).lastrowid
-        conn.execute("UPDATE strategies SET updated_at=? WHERE id=?", (now(), strategy_id))
-    return vid
+        return _insert_version(conn, strategy_id, pine_code, python_code, change_note)
 
 
 def list_versions(conn, strategy_id):
@@ -310,4 +319,4 @@ def fetch_covered(conn, ticker, interval, start, end):
 
 def log_fetch(conn, ticker, interval, start, end):
     with conn:
-        conn.execute("INSERT INTO price_fetches VALUES (?,?,?,?)", (ticker, interval, start, end))
+        conn.execute("INSERT OR IGNORE INTO price_fetches VALUES (?,?,?,?)", (ticker, interval, start, end))

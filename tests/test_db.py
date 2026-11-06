@@ -1,3 +1,8 @@
+import sqlite3
+
+import pytest
+from conftest import MARKET
+
 from workbench import db
 
 
@@ -37,14 +42,8 @@ def test_update_and_filter_strategies(conn):
 
 def test_update_rejects_unknown_fields(conn):
     sid = db.create_strategy(conn, "S", "description")
-    try:
+    with pytest.raises(ValueError):
         db.update_strategy(conn, sid, slug="hack")
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError")
-
-
-from conftest import MARKET
 
 
 def _run(conn, vid, ret=5.0):
@@ -85,11 +84,8 @@ def test_optimizations_and_insights(conn):
 
 
 def test_set_note_rejects_other_tables(conn):
-    try:
+    with pytest.raises(ValueError):
         db.set_note(conn, "strategies", 1, "x")
-    except ValueError:
-        return
-    raise AssertionError("expected ValueError")
 
 
 def test_delete_cascades(conn):
@@ -116,3 +112,27 @@ def test_price_bars_roundtrip_and_fetch_log(conn, goog):
     db.log_fetch(conn, "GOOG", "1d", "2004-08-19", "2004-09-02")
     assert db.fetch_covered(conn, "GOOG", "1d", "2004-08-20", "2004-09-01")
     assert not db.fetch_covered(conn, "GOOG", "1d", "2004-08-20", "2004-09-10")
+
+
+def test_create_strategy_is_atomic(conn):
+    with pytest.raises(sqlite3.IntegrityError):
+        db.create_strategy(conn, "Orphan", "description", pine_code=None)
+    assert db.list_strategies(conn) == []
+
+
+def test_update_strategy_without_fields_is_a_noop(conn):
+    sid = db.create_strategy(conn, "S", "description")
+    db.update_strategy(conn, sid)
+    assert db.get_strategy(conn, sid)["name"] == "S"
+
+
+def test_slugify_has_no_trailing_hyphen():
+    slug = db.slugify("a" * 59 + " b")
+    assert slug == "a" * 59 and not slug.endswith("-")
+    assert db.slugify("!!!") == "strategy"
+
+
+def test_log_fetch_is_idempotent(conn):
+    db.log_fetch(conn, "GOOG", "1d", "2004-08-19", "2004-09-02")
+    db.log_fetch(conn, "GOOG", "1d", "2004-08-19", "2004-09-02")
+    assert conn.execute("SELECT COUNT(*) FROM price_fetches").fetchone()[0] == 1
