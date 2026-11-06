@@ -67,6 +67,8 @@ def test_has_credentials(monkeypatch):
     assert not generate.has_credentials()
     monkeypatch.setenv("WORKBENCH_DRY_RUN", "1")
     assert generate.has_credentials()
+    monkeypatch.setenv("WORKBENCH_DRY_RUN", "0")
+    assert not generate.has_credentials()
 
 
 class FakeClient:

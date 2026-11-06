@@ -70,6 +70,7 @@ def test_cli_import_folder_continues_after_a_bad_file(tmp_path, goog, monkeypatc
     ["run", "sma-cross", "--param", "n1"],
     ["optimize", "sma-cross", "--range", "n1=5:10"],
     ["optimize", "sma-cross", "--range", "n1"],
+    ["run", "sma-cross", "--param", "nope=1"],
     ["run", "no-such-slug"],
 ])
 def test_cli_bad_input_exits_with_message(tmp_path, goog, monkeypatch, argv):

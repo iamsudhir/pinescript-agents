@@ -29,13 +29,18 @@ def test_coerce_to_default_type():
 
 
 def test_run_returns_params_stats_trades_equity(goog):
-    res = engine.run(SMA_CODE, goog, {"n1": "5", "unknown": 1}, cash=100_000, commission=0.0)
+    res = engine.run(SMA_CODE, goog, {"n1": "5"}, cash=100_000, commission=0.0)
     assert res.params == {"n1": 5, "n2": 20, "use_exit": True, "stop_pct": 0.0}
     assert list(res.stats) == engine.KEY_STATS
     assert res.stats["# Trades"] == len(res.trades) > 0
     assert isinstance(res.stats["# Trades"], int)
     assert res.trades[0]["EntryTime"].startswith("20") and isinstance(res.trades[0]["Duration"], str)
     assert len(res.equity) == len(goog) and res.equity[0][1] == 100_000
+
+
+def test_run_rejects_unknown_params(goog):
+    with pytest.raises(ValueError, match="unknown parameters.*nope"):
+        engine.run(SMA_CODE, goog, {"n1": 5, "nope": 1})
 
 
 def test_params_change_the_result(goog):
@@ -99,6 +104,21 @@ def test_optimize_samples_large_grids(goog):
 def test_load_strategy_rejects_io_and_dynamic_code(code):
     with pytest.raises(engine.StrategyContractError, match="not allowed"):
         engine.load_strategy(code)
+
+
+@pytest.mark.parametrize("code", [
+    "x = __builtins__.__import__('os')",
+    "import pandas as pd\nx = pd.io.common.os.getcwd()",
+    "x = ().__class__",
+    "import numpy as np\nx = np.sys",
+])
+def test_load_strategy_rejects_escape_routes(code):
+    with pytest.raises(engine.StrategyContractError, match="not allowed"):
+        engine.load_strategy(code)
+
+
+def test_load_strategy_allows_super_init():
+    engine.load_strategy(SMA_CODE + "\n    def __init__(self, *a, **k):\n        super().__init__(*a, **k)\n")
 
 
 def test_load_strategy_still_accepts_reference_code():

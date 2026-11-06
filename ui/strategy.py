@@ -131,7 +131,7 @@ def fix_with_claude(pine, python, error):
         return
     new_vid = db.add_version(conn, sid, fixed.pine, fixed.python,
                              "fix with Claude: " + error.strip().splitlines()[-1][:80])
-    db.update_strategy(conn, sid, notes=fixed.notes)
+    db.update_strategy(conn, sid, notes=[*s["notes"], *fixed.notes])
     state.pop("error", None)
     jump(new_vid, "Saved Claude's fix as a new version")
 
@@ -184,7 +184,7 @@ def show_opt(opt, where):
         except engine.StrategyContractError as e:
             st.error(str(e))
             return
-        params = {k: engine.coerce(row[k], defaults[k]) for k in names if k in defaults}
+        params = {**defaults, **{k: engine.coerce(row[k], defaults[k]) for k in names if k in defaults}}
         jump(version["id"], "Parameters loaded: open the Backtest tab", params=params, market=market_of(opt))
 
 

@@ -20,7 +20,8 @@ def model():
 
 
 def has_credentials():
-    return any(os.environ.get(k) for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "WORKBENCH_DRY_RUN"))
+    return os.environ.get("WORKBENCH_DRY_RUN") == "1" or any(
+        os.environ.get(k) for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"))
 
 
 class GenerationError(Exception):
@@ -164,7 +165,7 @@ def system_prompt():
 
 def _call(user, schema=SCHEMA, system=None):
     """One Claude request. Returns parsed JSON when `schema` is given, else markdown text."""
-    if os.environ.get("WORKBENCH_DRY_RUN"):
+    if os.environ.get("WORKBENCH_DRY_RUN") == "1":
         return dict(DRY_RUN) if schema else DRY_RUN_ANALYSIS
     output_config = {"effort": "high"}
     if schema:

@@ -77,6 +77,6 @@ def analyze(conn, strategy_id, run_ids=None):
                                                 "maximize", "best_params", "best_value", "note")},
                            "top_20": o["results"][:20]} for o in opts],
     }
-    content = generate.analyze_results(db.latest_version(conn, strategy_id)["python_code"], payload)
+    content = generate.analyze_results(db.get_version(conn, runs[0]["strategy_version_id"])["python_code"], payload)
     return db.save_insight(conn, strategy_id, content, [r["id"] for r in runs], [o["id"] for o in opts],
                            generate.model())

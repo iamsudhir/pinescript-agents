@@ -21,6 +21,7 @@ _MODULE = "workbench_strategy"
 ALLOWED_IMPORTS = {"numpy", "pandas", "math", "backtesting"}
 BANNED_NAMES = {"open", "exec", "eval", "compile", "__import__", "input", "breakpoint", "globals", "locals",
                 "getattr", "setattr", "delattr", "vars"}
+BANNED_ATTRS = {"os", "sys", "subprocess", "read_pickle", "builtins", "importlib"}
 
 
 class StrategyContractError(Exception):
@@ -29,9 +30,7 @@ class StrategyContractError(Exception):
 
 def load_strategy(code):
     """Exec strategy code; return (its single Strategy subclass, {param: default})."""
-    # ponytail: runs in-process with no sandbox. The checks below only stop obvious I/O and dynamic
-    # code in what Claude generates (transcripts are third-party input); they are not a sandbox.
-    # Move to a subprocess before ever loading strategies from other people.
+    # ponytail: runs in-process with no sandbox; blocks obvious routes only; a subprocess is the real fix.
     ns = {"__name__": _MODULE}
     try:
         tree = ast.parse(code, "strategy.py")
@@ -45,6 +44,10 @@ def load_strategy(code):
                 raise ImportError("relative imports are not allowed")
             if isinstance(node, ast.Name) and node.id in BANNED_NAMES:
                 raise NameError(f"{node.id}() is not allowed")
+            ident = node.id if isinstance(node, ast.Name) else node.attr if isinstance(node, ast.Attribute) else ""
+            if (ident.startswith("__") and ident != "__init__") or (
+                    isinstance(node, ast.Attribute) and ident in BANNED_ATTRS):
+                raise NameError(f"{ident!r} is not allowed")
         exec(compile(tree, "strategy.py", "exec"), ns)
     except (Exception, SystemExit) as e:
         raise StrategyContractError(f"strategy.py failed to load: {type(e).__name__}: {e}") from e
@@ -90,7 +93,10 @@ def _backtest(cls, df, cash, commission):
 
 def run(code, df, params=None, cash=1_000_000, commission=0.0005):
     cls, defaults = load_strategy(code)
-    full = {**defaults, **{k: coerce(v, defaults[k]) for k, v in (params or {}).items() if k in defaults}}
+    unknown = set(params or {}) - set(defaults)
+    if unknown:
+        raise ValueError(f"unknown parameters {sorted(unknown)}; this strategy has {sorted(defaults)}")
+    full = {**defaults, **{k: coerce(v, defaults[k]) for k, v in (params or {}).items()}}
     bt = _backtest(cls, df, cash, commission)
     s = bt.run(**full)
     trades = s._trades[[c for c in TRADE_COLS if c in s._trades]].copy()

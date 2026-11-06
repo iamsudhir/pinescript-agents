@@ -62,6 +62,7 @@ def test_strategy_page_interaction(tmp_path, monkeypatch):
     assert not at.exception
     assert any(m.label == "Return [%]" for m in at.metric)
 
+    next(n for n in at.number_input if n.label == "n2").set_value(25).run()  # not optimized: must reset on load
     at.checkbox(key=f"o_{vid}_p_n1").check().run()
     next(b for b in at.button if b.label.startswith("Run optimization")).click().run()
     assert not at.exception
@@ -69,4 +70,5 @@ def test_strategy_page_interaction(tmp_path, monkeypatch):
     at.button(key=f"use_opt_{opt['id']}").click().run()
     assert not at.exception
     assert next(n for n in at.number_input if n.label == "n1").value == opt["best_params"]["n1"]
+    assert next(n for n in at.number_input if n.label == "n2").value == 20
     assert not at.exception

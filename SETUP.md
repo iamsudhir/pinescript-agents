@@ -38,12 +38,12 @@ tools/traderspost-to-pine.py  TradersPost trade CSV -> Pine arrays for traderspo
 
 ## Requirements
 
-- Python 3.9+ (video tools), Node 18+ (docs MCP server)
+- Python 3.10+ (video tools), Node 18+ (docs MCP server)
 - Windows: run `setup.sh` from Git Bash. Install Python with `winget install Python.Python.3.12`
   and turn off the python/python3 "App execution aliases" (Settings > Apps > Advanced app settings)
 - [Claude Code](https://claude.ai/code) CLI or IDE extension
 - Optional: `ffmpeg` and `pip install openai-whisper` for videos without captions
-- No API keys or secrets are needed. Claude Code uses your own Claude login.
+- The Pine-in-Claude-Code workflow needs no API keys (Claude Code uses your own Claude login). The Strategy workbench needs an Anthropic API key in `.env`.
 
 ## Install
 
@@ -109,18 +109,23 @@ is limited by yfinance (~60 days for 5m-30m, ~2 years for 1h).
 Command line (same database):
 
 ```bash
-.venv/Scripts/python -m workbench list
+.venv/Scripts/python -m workbench list   # (slugs: see `list`)
 .venv/Scripts/python -m workbench new --url "https://www.youtube.com/watch?v=..."
 .venv/Scripts/python -m workbench import projects/
-.venv/Scripts/python -m workbench run ema-cross --ticker ^NSEI --param fast_len=12
-.venv/Scripts/python -m workbench optimize ema-cross --range fast_len=5:20:5 --range slow_len=20:60:10
-.venv/Scripts/python -m workbench analyze ema-cross
+.venv/Scripts/python -m workbench run <slug> --ticker ^NSEI --param fast_len=12
+.venv/Scripts/python -m workbench optimize <slug> --range fast_len=5:20:5 --range slow_len=20:60:10
+.venv/Scripts/python -m workbench analyze <slug>
 ```
 
 Notes:
 - Back up by copying `workbench.db` while the app is stopped.
-- Generated Python runs inside the app. A check blocks imports other than numpy/pandas/math/backtesting
-  and obvious I/O (`open`, `exec`, ...), but it is not a sandbox: only run strategies you generated.
+- Generated Python runs inside the app as soon as it is generated. A check blocks imports other than
+  numpy/pandas/math/backtesting and obvious escape routes, but it is not a sandbox, and a YouTube transcript
+  is third-party text that can steer what Claude writes. Prefer videos from sources you trust, and read the
+  generated Python before relying on it.
+- Price data is cached; yfinance adjusts history for splits/dividends, so after a corporate action an old
+  cached range and a newer fetch can differ slightly. To force a clean re-download, start a fresh DB
+  (delete `workbench.db`; this also deletes your strategies and runs, so back it up first).
 - Videos without captions need Whisper (`pip install openai-whisper`); the app never installs it for you.
 - `WORKBENCH_DRY_RUN=1` runs everything without calling Claude (fixed EMA-cross example).
 - Tests: `.venv/Scripts/python -m pytest`

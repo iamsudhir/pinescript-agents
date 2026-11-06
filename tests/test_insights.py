@@ -50,6 +50,16 @@ def test_analyze_saves_insight(conn, monkeypatch):
     assert ins["id"] == iid and ins["run_ids"] == [rid] and ins["content"].startswith("## ")
 
 
+def test_analyze_sends_the_code_the_newest_run_used(conn, monkeypatch):
+    sent = []
+    monkeypatch.setattr(insights.generate, "analyze_results", lambda code, payload: sent.append(code) or "## x")
+    sid = db.create_strategy(conn, "S", "description", python_code="# v1")
+    _run(conn, db.latest_version(conn, sid)["id"], "A", 10.0, 1.0)
+    db.add_version(conn, sid, "//@version=6", "# v2", "edit")
+    insights.analyze(conn, sid)
+    assert sent == ["# v1"]
+
+
 def test_analyze_without_runs_raises_before_calling_claude(conn, monkeypatch):
     monkeypatch.setattr(insights.generate, "_call", lambda *a, **k: pytest.fail("Claude was called"))
     sid = db.create_strategy(conn, "S", "description", python_code=SMA_CODE)
