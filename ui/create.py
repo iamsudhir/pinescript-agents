@@ -30,17 +30,23 @@ url_tab, desc_tab, pine_tab = st.tabs(["YouTube URL", "Description", "Import .pi
 
 with url_tab:
     url = st.text_input("YouTube URL", placeholder="https://www.youtube.com/watch?v=...")
-    if st.button("Generate from video", type="primary", disabled=not url.strip()):
-        create("Fetching the transcript and writing Pine + Python, usually 1-3 minutes...",
-               lambda: actions.create_from(conn, generate.from_youtube(url.strip()), "youtube"))
+    if st.button("Generate from video", type="primary"):
+        if not url.strip():
+            st.warning("Enter a YouTube URL first.")
+        else:
+            create("Fetching the transcript and writing Pine + Python, usually 1-3 minutes...",
+                   lambda: actions.create_from(conn, generate.from_youtube(url.strip()), "youtube"))
 
 with desc_tab:
     desc = st.text_area("Describe the strategy", height=200, placeholder=(
         "RSI(2) mean reversion on Nifty: buy when RSI(2) < 10 and close > 200 EMA; "
         "exit when close crosses above the 5 SMA; 3% stop."))
-    if st.button("Generate from description", type="primary", disabled=not desc.strip()):
-        create("Writing Pine + Python, usually 1-3 minutes...",
-               lambda: actions.create_from(conn, generate.from_description(desc), "description"))
+    if st.button("Generate from description", type="primary"):
+        if not desc.strip():
+            st.warning("Describe the strategy first.")
+        else:
+            create("Writing Pine + Python, usually 1-3 minutes...",
+                   lambda: actions.create_from(conn, generate.from_description(desc), "description"))
 
 with pine_tab:
     done = db.sources(conn, "pine_import")

@@ -6,11 +6,11 @@ import traceback
 import altair as alt
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
 
 from workbench import actions, data, db, engine, generate, insights
 
 conn = db.connect()
+MIN_DATE = dt.date(1990, 1, 1)
 state = st.session_state
 sid = state.get("strategy_id")
 s = db.get_strategy(conn, sid) if sid else None
@@ -19,11 +19,14 @@ if not s:
     st.stop()
 
 state.setdefault("form_gen", 0)
-state.setdefault("market", {
-    "ticker": s["default_ticker"], "interval": s["default_interval"],
-    "start": dt.date.fromisoformat(data.default_start(s["default_interval"])), "end": dt.date.today(),
-    "cash": 1_000_000.0, "commission": 0.0005,
-})
+if state.get("market_for") != sid:  # market settings belong to one strategy: start from its defaults
+    state.market_for = sid
+    state.form_gen += 1  # fresh widget keys, so the old strategy's typed values are not reused
+    state.market = {
+        "ticker": s["default_ticker"], "interval": s["default_interval"],
+        "start": dt.date.fromisoformat(data.default_start(s["default_interval"])), "end": dt.date.today(),
+        "cash": 1_000_000.0, "commission": 0.0005,
+    }
 
 # Buttons that load a run or parameters store a "goto" and rerun. A widget's value can't be
 # changed once it is drawn, so the goto is applied here, and form_gen gives the form fresh
@@ -54,7 +57,7 @@ def market_of(rec):
 
 
 def fmt(x):
-    return "-" if x is None else f"{x:,.2f}"
+    return "-" if x is None else f"{x:,.2f}".replace("-0.00", "0.00")
 
 
 # --- header, version, market ----------------------------------------------------
@@ -80,12 +83,17 @@ market = {
     "interval": c[1].selectbox("Interval", data.INTERVALS, key=f"mk_interval_{gen}",
                                index=data.INTERVALS.index(m["interval"]) if m["interval"] in data.INTERVALS else 0,
                                help="yfinance keeps ~60 days of 5m-30m bars and ~2 years of 1h bars"),
-    "start": c[2].date_input("Start", m["start"], key=f"mk_start_{gen}"),
-    "end": c[3].date_input("End (exclusive)", m["end"], key=f"mk_end_{gen}"),
+    "start": c[2].date_input("Start", m["start"], min_value=MIN_DATE, max_value=dt.date.today(), key=f"mk_start_{gen}"),
+    "end": c[3].date_input("End (exclusive)", m["end"], min_value=MIN_DATE, max_value=dt.date.today(),
+                            key=f"mk_end_{gen}"),
     "cash": c[4].number_input("Cash", value=float(m["cash"]), step=100_000.0, key=f"mk_cash_{gen}"),
     "commission": c[5].number_input("Commission", value=float(m["commission"]), step=0.0001, format="%.4f",
                                     key=f"mk_comm_{gen}", help="Fraction per side: 0.0005 = 0.05%"),
 }
+if market["interval"] != m["interval"]:  # the old start may be out of range for the new interval
+    state.market = {**market, "start": dt.date.fromisoformat(data.default_start(market["interval"]))}
+    state.form_gen += 1
+    st.rerun()
 state.market = market
 run_market = {**market, "start": market["start"].isoformat(), "end": market["end"].isoformat()}
 
@@ -147,7 +155,7 @@ def show_run(run, where):
         st.line_chart(eq, x="Time", y="Equity")
     st.dataframe(pd.DataFrame(run["trades"]), hide_index=True)
     if st.button("Open full interactive chart", key=f"chart_{where}_{run['id']}"):
-        guarded(lambda: components.html(actions.chart_for_run(conn, run["id"]), height=900, scrolling=True))
+        guarded(lambda: st.iframe(actions.chart_for_run(conn, run["id"]), height=900))
 
 
 def show_opt(opt, where):
@@ -169,7 +177,11 @@ def show_opt(opt, where):
     row = res.iloc[picked.selection.rows[0]].to_dict() if picked.selection.rows else opt["best_params"]
     if st.button("Load selected row (or best) into Backtest", key=f"use_{where}_{opt['id']}"):
         version = db.get_version(conn, opt["strategy_version_id"])
-        defaults = engine.load_strategy(version["python_code"])[1]
+        try:
+            defaults = engine.load_strategy(version["python_code"])[1]
+        except engine.StrategyContractError as e:
+            st.error(str(e))
+            return
         params = {k: engine.coerce(row[k], defaults[k]) for k in names if k in defaults}
         jump(version["id"], "Parameters loaded: open the Backtest tab", params=params, market=market_of(opt))
 
@@ -191,12 +203,18 @@ with code_tab:
     right.download_button("Download .py", python, f'{s["slug"]}.py', key="dl_py")
     with left.expander("Pine with a copy button"):
         st.code(pine, language=None)
-    if st.button("Save edits as a new version", disabled=(pine, python) == (v["pine_code"], v["python_code"])):
-        jump(db.add_version(conn, sid, pine, python, "manual edit"), "Saved as a new version")
+    if st.button("Save edits as a new version"):
+        if (pine, python) == (v["pine_code"], v["python_code"]):
+            st.info("No changes to save.")
+        else:
+            jump(db.add_version(conn, sid, pine, python, "manual edit"), "Saved as a new version")
     error = st.text_area("Paste an error for Claude to fix (TradingView compiler error or Python traceback)",
                          key=f"err_{vid}")
-    if st.button("Fix with Claude", disabled=not error.strip(), key="fix_code"):
-        fix_with_claude(pine, python, error)
+    if st.button("Fix with Claude", key="fix_code"):
+        if error.strip():
+            fix_with_claude(pine, python, error)
+        else:
+            st.warning("Paste an error first.")
 
 # --- Backtest -----------------------------------------------------------------------
 
@@ -235,7 +253,7 @@ with opt_tab:
         ranges = {}
         for k, d in params.items():
             row = st.columns([2, 1, 1, 1])
-            if not row[0].checkbox(k, key=f"o_{vid}_{k}"):
+            if not row[0].checkbox(k, key=f"o_{vid}_p_{k}"):
                 continue
             if isinstance(d, bool):
                 row[1].caption("tries False and True")
@@ -243,16 +261,19 @@ with opt_tab:
                 continue
             lo, hi, step = engine.default_range(d)
             f = None if isinstance(d, int) else "%g"
-            ranges[k] = (row[1].number_input("min", value=lo, format=f, key=f"o_{vid}_{k}_lo"),
-                         row[2].number_input("max", value=hi, format=f, key=f"o_{vid}_{k}_hi"),
-                         row[3].number_input("step", value=step, format=f, key=f"o_{vid}_{k}_step"))
-        maximize = st.selectbox("Maximize", engine.MAXIMIZE, key=f"o_{vid}_max")
+            ranges[k] = (row[1].number_input("min", value=lo, format=f, key=f"o_{vid}_p_{k}_lo"),
+                         row[2].number_input("max", value=hi, format=f, key=f"o_{vid}_p_{k}_hi"),
+                         row[3].number_input("step", value=step, format=f, key=f"o_{vid}_p_{k}_step"))
+        maximize = st.selectbox("Maximize", engine.MAXIMIZE, key=f"o_{vid}_maximize")
         n = engine.grid_size(ranges, params)
-        if st.button(f"Run optimization ({n} combinations)", type="primary", disabled=n == 0):
-            def go():
-                with st.spinner("Optimizing..."):
-                    state.view_opt = actions.optimize(conn, vid, run_market, ranges, maximize)[0]
-            guarded(go)
+        if st.button(f"Run optimization ({n} combinations)", type="primary"):
+            if n == 0:
+                st.warning("Tick at least one parameter with a non-empty range.")
+            else:
+                def go():
+                    with st.spinner("Optimizing..."):
+                        state.view_opt = actions.optimize(conn, vid, run_market, ranges, maximize)[0]
+                guarded(go)
     show_error("opt")
     opt = db.get_optimization(conn, state["view_opt"]) if state.get("view_opt") else None
     if opt and opt["strategy_id"] == sid:
@@ -272,7 +293,7 @@ with hist_tab:
             "Note": r["note"] or "", "When": r["created_at"][:16],
         } for r in runs])
         rows = st.dataframe(table, hide_index=True, on_select="rerun", selection_mode="multi-row",
-                            key="hist_runs").selection.rows
+                            key=f"hist_runs_{sid}_{len(runs)}").selection.rows
         picked = [runs[i] for i in rows]
         if len(picked) == 1:
             r = picked[0]
@@ -301,7 +322,7 @@ with hist_tab:
             "Best params": json.dumps(o["best_params"]), "Note": o["note"] or "", "When": o["created_at"][:16],
         } for o in opts])
         sel = st.dataframe(otable, hide_index=True, on_select="rerun", selection_mode="single-row",
-                           key="hist_opts").selection.rows
+                           key=f"hist_opts_{sid}_{len(opts)}").selection.rows
         if sel:
             o = db.get_optimization(conn, opts[sel[0]]["id"])
             note = st.text_input("Note for this optimization", o["note"] or "", key=f"onote_{o['id']}")

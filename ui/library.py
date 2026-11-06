@@ -20,7 +20,8 @@ if not rows:
 
 
 def stat(r, key):
-    return (r["latest_stats"] or {}).get(key)
+    v = (r["latest_stats"] or {}).get(key)
+    return float("nan") if v is None else v
 
 
 table = pd.DataFrame([{
