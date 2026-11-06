@@ -57,7 +57,9 @@ def market_of(rec):
 
 
 def fmt(x):
-    return "-" if x is None else f"{x:,.2f}".replace("-0.00", "0.00")
+    if x is None:
+        return "-"
+    return f"{x:,}" if isinstance(x, int) else f"{x:,.2f}".replace("-0.00", "0.00")
 
 
 # --- header, version, market ----------------------------------------------------

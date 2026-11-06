@@ -79,3 +79,48 @@ npm --prefix docs/server start     # or: npm --prefix docs/server test
 
 Testing a strategy: copy the `.pine` file from `projects/` into TradingView's Pine Editor,
 add it to a chart, and open the Strategy Tester tab.
+
+## Strategy workbench (YouTube → Pine + Python backtest)
+
+A local web app that turns a YouTube video, a description, or a `.pine` file from `projects/`
+into a Pine Script v6 strategy (paste it into TradingView) **and** an equivalent Python strategy,
+backtests it on yfinance data, tunes its parameters, and keeps every version, run, optimization
+and insight in `workbench.db` (SQLite).
+
+Setup (once):
+
+```bash
+cp .env.example .env              # then put your Anthropic API key in .env
+.venv/Scripts/python -m pip install -r requirements.txt   # macOS/Linux: .venv/bin/python
+```
+
+Run:
+
+```bash
+.venv/Scripts/streamlit run app.py
+```
+
+Pages: **Create** (URL / description / import .pine), **Library** (all strategies, filter by
+status and rating), **Strategy** (Code, Backtest, Optimize, History, Insights).
+
+Tickers are yfinance symbols: `RELIANCE.NS`, `^NSEI`, `^NSEBANK`, `AAPL`, `BTC-USD`. Intraday data
+is limited by yfinance (~60 days for 5m-30m, ~2 years for 1h).
+
+Command line (same database):
+
+```bash
+.venv/Scripts/python -m workbench list
+.venv/Scripts/python -m workbench new --url "https://www.youtube.com/watch?v=..."
+.venv/Scripts/python -m workbench import projects/
+.venv/Scripts/python -m workbench run ema-cross --ticker ^NSEI --param fast_len=12
+.venv/Scripts/python -m workbench optimize ema-cross --range fast_len=5:20:5 --range slow_len=20:60:10
+.venv/Scripts/python -m workbench analyze ema-cross
+```
+
+Notes:
+- Back up by copying `workbench.db` while the app is stopped.
+- Generated Python runs inside the app. A check blocks imports other than numpy/pandas/math/backtesting
+  and obvious I/O (`open`, `exec`, ...), but it is not a sandbox: only run strategies you generated.
+- Videos without captions need Whisper (`pip install openai-whisper`); the app never installs it for you.
+- `WORKBENCH_DRY_RUN=1` runs everything without calling Claude (fixed EMA-cross example).
+- Tests: `.venv/Scripts/python -m pytest`
