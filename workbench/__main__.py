@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from . import actions, data, db, engine, generate, insights
+from . import actions, data, db, dhan, engine, generate, insights, lake
 
 
 def _pairs(items):
@@ -30,9 +30,9 @@ def _strategy(conn, slug):
 
 
 def _market(a, s):
-    interval = a.interval or s["default_interval"]
-    return {"ticker": a.ticker or s["default_ticker"], "interval": interval,
-            "start": a.start or data.default_start(interval), "end": a.end or dt.date.today().isoformat(),
+    interval, ticker = a.interval or s["default_interval"], a.ticker or s["default_ticker"]
+    return {"ticker": ticker, "interval": interval,
+            "start": a.start or data.default_start(interval, ticker), "end": a.end or dt.date.today().isoformat(),
             "cash": a.cash, "commission": a.commission}
 
 
@@ -58,12 +58,14 @@ def main(argv=None):
     opt.add_argument("--maximize", default="Sharpe Ratio", choices=engine.MAXIMIZE)
     sub.add_parser("summary", help="computed summary of all runs").add_argument("slug")
     sub.add_parser("analyze", help="ask Claude to analyze the results").add_argument("slug")
+    sub.add_parser("lake-pull", help="copy symbols' 5m + daily bars from the MyHFTAlgoBot lake (LAKE_REMOTE)"
+                   ).add_argument("tickers", nargs="+", metavar="TICKER", help="e.g. RAYMOND.NS ^NSEI")
     a = p.parse_args(argv)
     conn = db.connect()
     try:
         _dispatch(a, conn)
     except (generate.GenerationError, data.DataError, engine.StrategyContractError, ValueError, KeyError,
-            OSError) as e:
+            OSError, dhan.DhanError) as e:
         sys.exit(f"error: {e}")
 
 
@@ -103,6 +105,9 @@ def _dispatch(a, conn):
         s = _strategy(conn, a.slug)
         insights.analyze(conn, s["id"])
         print(db.list_insights(conn, s["id"])[0]["content"])
+    elif a.cmd == "lake-pull":
+        for ticker, size, status in lake.pull(conn, a.tickers):
+            print(f"{ticker:15} {size:3} {status}")
 
 
 if __name__ == "__main__":

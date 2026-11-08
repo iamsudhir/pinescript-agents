@@ -226,7 +226,12 @@ class VideoAnalyzer:
                     source = "english_captions"
                     print("✅ Found English captions")
                 except:
-                    return None, "no_captions"
+                    # Any language (e.g. Hindi auto-captions): Claude reads it directly
+                    transcript = next(iter(transcript_list), None)
+                    if transcript is None:
+                        return None, "no_captions"
+                    source = f"captions_{transcript.language_code}"
+                    print(f"✅ Found {transcript.language} captions")
 
             # Fetch the actual transcript
             transcript_data = transcript.fetch()

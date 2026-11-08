@@ -66,3 +66,20 @@ def test_end_is_capped_at_today(conn, monkeypatch):
     data.load_data(conn, "X", "1d", "2020-01-01", "2099-01-01")
     data.load_data(conn, "X", "1d", "2020-01-01", today)
     assert calls == [today]
+
+
+def test_3m_is_built_from_1m_in_7_day_chunks(conn, monkeypatch):
+    calls = []
+
+    def fake_download(ticker, start, end, interval, **kw):
+        calls.append((start, end, interval))
+        idx = pd.date_range(f"{start} 09:15", periods=6, freq="1min", tz="Asia/Kolkata")
+        return pd.DataFrame({"Open": [1, 2, 3, 4, 5, 6], "High": 9.0, "Low": 0.5,
+                             "Close": [1, 2, 3, 4, 5, 6], "Volume": 10.0}, index=idx)
+
+    monkeypatch.setattr(data.yf, "download", fake_download)
+    out = data.load_data(conn, "X.NS", "3m", "2024-01-01", "2024-01-15")
+    assert calls == [("2024-01-01", "2024-01-08", "1m"), ("2024-01-08", "2024-01-15", "1m")]
+    day = out.loc["2024-01-01"]
+    assert [str(t.time()) for t in day.index] == ["09:15:00", "09:18:00"]
+    assert day.Open.tolist() == [1, 4] and day.Close.tolist() == [3, 6] and day.Volume.tolist() == [30, 30]

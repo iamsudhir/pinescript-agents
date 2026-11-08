@@ -75,6 +75,9 @@ CREATE TABLE IF NOT EXISTS price_fetches(
     ticker TEXT NOT NULL, interval TEXT NOT NULL, start_date TEXT NOT NULL, end_date TEXT NOT NULL,
     PRIMARY KEY(ticker, interval, start_date, end_date)
 );
+CREATE TABLE IF NOT EXISTS dhan_symbols(
+    symbol TEXT PRIMARY KEY, security_id TEXT NOT NULL, segment TEXT NOT NULL, instrument TEXT NOT NULL
+);
 CREATE INDEX IF NOT EXISTS runs_by_version ON runs(strategy_version_id);
 CREATE INDEX IF NOT EXISTS opts_by_version ON optimizations(strategy_version_id);
 """
@@ -120,7 +123,7 @@ def slugify(name):
 
 
 def create_strategy(conn, name, source_type, source=None, transcript=None, notes=None,
-                    pine_code="", python_code="", change_note="generated"):
+                    pine_code="", python_code="", change_note="generated", default_interval="1d"):
     """Insert a strategy and its first code version; returns the strategy id."""
     base = slug = slugify(name)
     n = 2
@@ -129,9 +132,10 @@ def create_strategy(conn, name, source_type, source=None, transcript=None, notes
     ts = now()
     with conn:
         sid = conn.execute(
-            "INSERT INTO strategies(slug, name, source_type, source, transcript, notes, created_at, updated_at)"
-            " VALUES (?,?,?,?,?,?,?,?)",
-            (slug, name, source_type, source, transcript, json.dumps(notes or []), ts, ts)).lastrowid
+            "INSERT INTO strategies(slug, name, source_type, source, transcript, notes, default_interval,"
+            " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+            (slug, name, source_type, source, transcript, json.dumps(notes or []), default_interval,
+             ts, ts)).lastrowid
         _insert_version(conn, sid, pine_code, python_code, change_note)
     return sid
 

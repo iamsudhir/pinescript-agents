@@ -57,3 +57,6 @@ __pycache__/
 # Strategy workbench database (SQLite + WAL files)
 workbench.db*
 .pytest_cache/
+
+# Local copy of MyHFTAlgoBot lake symbols (python -m workbench lake-pull)
+lake/

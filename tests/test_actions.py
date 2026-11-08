@@ -37,3 +37,24 @@ def test_create_from_and_import_pine(conn, monkeypatch, tmp_path):
 def test_rel_is_repo_relative_inside_repo():
     from workbench import ROOT
     assert actions.rel(ROOT / "projects" / "blank.pine") == "projects/blank.pine"
+
+
+def test_create_from_keeps_generated_interval(conn):
+    gen = generate.Generated(name="ORB", pine="", python="", interval="5m")
+    assert db.get_strategy(conn, actions.create_from(conn, gen, "description"))["default_interval"] == "5m"
+
+
+def test_strategy_with_index_ticker_gets_index_bars(conn, goog, monkeypatch):
+    seen = []
+
+    def fake_load(conn, ticker, interval, start, end):
+        seen.append(ticker)
+        return goog if ticker == "GOOG" else goog.iloc[::2] * 2  # the index misses every other bar
+
+    monkeypatch.setattr(actions.data, "load_data", fake_load)
+    code = SMA_CODE.replace("    n1 = 10\n", '    index_ticker = "^NSEI"\n    n1 = 10\n')
+    df = actions._load(conn, MARKET, code)
+    assert seen == ["GOOG", "^NSEI"] and list(df.columns[-2:]) == ["IndexOpen", "IndexClose"]
+    assert df.IndexClose.iloc[0] == goog.Close.iloc[0] * 2 and df.IndexClose.isna().sum() == len(goog) // 2
+    assert "index_ticker" not in actions.engine.load_strategy(code)[1]  # not a tunable parameter
+    assert list(actions._load(conn, MARKET, SMA_CODE).columns) == list(goog.columns)

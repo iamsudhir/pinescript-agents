@@ -1,0 +1,123 @@
+//@version=6
+strategy("Opening Range Trend Day", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.05, calc_on_order_fills=false, calc_on_every_tick=false, process_orders_on_close=false, use_bar_magnifier=false, margin_long=0, margin_short=0)
+//@strategy_alert_message {{strategy.order.alert_message}}
+
+// The day's first break of the opening range, held to the close. Built for NSE stocks on a 5m chart.
+
+orMins = input.int(30, "Opening Range Minutes", minval=1, group="Opening Range", tooltip="Minutes from the session's first bar that form the range")
+endHour = input.int(14, "Last Entry Hour", minval=0, maxval=23, group="Opening Range")
+endMin = input.int(30, "Last Entry Minute", minval=0, maxval=59, group="Opening Range", tooltip="No new breakout entries after this time")
+eodHour = input.int(15, "EOD Exit Hour", minval=0, maxval=23, group="Exits")
+eodMin = input.int(15, "EOD Exit Minute", minval=0, maxval=59, group="Exits", tooltip="Close any position on the first bar at or after this time")
+useShort = input.bool(true, "Allow Shorts", group="Exits")
+bufferPct = input.float(0.02, "Entry Buffer %", minval=0, step=0.01, group="Opening Range", tooltip="Enter this far beyond the range edge: a touch of the edge is not a breakout")
+maxStopPct = input.float(0.0, "Max Stop % (0 = range)", minval=0, step=0.1, group="Exits", tooltip="Caps the stop distance from the breakout level. 0 = stop at the other side of the opening range.")
+useIndex = input.bool(true, "Index Must Agree", group="Filters", tooltip="Longs only when the index rose over the opening range, shorts only when it fell")
+indexSym = input.symbol("NSE:NIFTY", "Index", group="Filters")
+useSelect = input.bool(true, "Only If Recent Breakouts Paid", group="Selection", tooltip="Tracks every day's first breakout (traded or not) and trades only while their recent average, after costs, is above the threshold")
+selDays = input.int(182, "Lookback Days", minval=1, group="Selection")
+selMinTrades = input.int(30, "Min Breakouts In Lookback", minval=1, group="Selection")
+selMinAvg = input.float(0.0, "Min Avg % Per Breakout", step=0.01, group="Selection")
+costPct = input.float(0.1, "Cost % Per Breakout", minval=0, step=0.01, group="Selection", tooltip="Round-trip cost charged to each tracked breakout")
+
+[idxO, idxC] = request.security(indexSym, timeframe.period, [open, close], lookahead=barmerge.lookahead_off)
+
+newDay = timeframe.change("1D")
+barMin = hour(time) * 60 + minute(time)
+barLen = timeframe.in_seconds() / 60
+
+var float dayStart = na
+var float orH = na
+var float orL = na
+var float idxOpen = na
+var int idxDir = 0
+var bool traded = false
+var int nStart = 0
+var int shSide = 0
+var bool shDone = true
+var float shEntry = na
+var float shStop = na
+var array<int> shTime = array.new<int>()
+var array<float> shRet = array.new<float>()
+
+if newDay
+    if shSide != 0 and not shDone  // yesterday's bars stopped before the EOD time
+        array.push(shTime, time[1])
+        array.push(shRet, shSide * (close[1] / shEntry - 1) * 100 - costPct)
+    if strategy.position_size != 0
+        strategy.close_all(comment="Carried over", alert_message="Close carried-over position")
+    dayStart := barMin
+    orH := na
+    orL := na
+    idxOpen := idxO
+    idxDir := 0
+    traded := false
+    nStart := strategy.closedtrades + strategy.opentrades
+    shSide := 0
+    shDone := false
+
+orEnd = dayStart + orMins
+lastEntry = endHour * 60 + endMin
+eodNow = barMin >= eodHour * 60 + eodMin
+inOr = barMin < orEnd
+upLvl = orH * (1 + bufferPct / 100)  // breakout levels for the tracking below (the range is final by then)
+dnLvl = orL * (1 - bufferPct / 100)
+
+if inOr
+    orH := na(orH) ? high : math.max(orH, high)
+    orL := na(orL) ? low : math.min(orL, low)
+    idxDir := int(math.sign(idxC - idxOpen))
+else if not shDone and not na(orH)
+    // Track the day's first breakout whether or not it is traded: the selection filter's input
+    if shSide == 0
+        if barMin > lastEntry
+            shDone := true
+        else if high >= upLvl and low <= dnLvl
+            shDone := true
+        else if high >= upLvl
+            shSide := 1
+            shEntry := math.max(upLvl, open)
+            shStop := orL
+        else if low <= dnLvl
+            shSide := -1
+            shEntry := math.min(dnLvl, open)
+            shStop := orH
+    else
+        hit = shSide == 1 ? low <= shStop : high >= shStop
+        if hit or eodNow
+            array.push(shTime, time)
+            array.push(shRet, shSide * ((hit ? shStop : close) / shEntry - 1) * 100 - costPct)
+            shDone := true
+
+if strategy.closedtrades + strategy.opentrades > nStart
+    traded := true
+
+if eodNow and strategy.position_size != 0
+    strategy.close_all(comment="EOD", alert_message="EOD exit")
+
+// Selection: average net % of the tracked breakouts within the lookback
+cutoff = time - selDays * 86400000
+while array.size(shTime) > 0 and array.get(shTime, 0) < cutoff
+    array.shift(shTime)
+    array.shift(shRet)
+nSel = array.size(shRet)
+avgSel = nSel > 0 ? array.avg(shRet) : 0.0
+selOk = not useSelect or (nSel >= selMinTrades and avgSel > selMinAvg)
+
+canPlace = orH > orL and barMin + barLen >= orEnd and barMin + barLen <= lastEntry and not eodNow
+longSL = maxStopPct > 0 ? math.max(orL, orH * (1 - maxStopPct / 100)) : orL
+shortSL = maxStopPct > 0 ? math.min(orH, orL * (1 + maxStopPct / 100)) : orH
+
+if canPlace and not traded and strategy.position_size == 0 and selOk
+    if not useIndex or idxDir > 0
+        strategy.entry("Long", strategy.long, stop=orH * (1 + bufferPct / 100), oca_name="orb", oca_type=strategy.oca.cancel, alert_message="Opening range breakout long")
+        strategy.exit("Long SL", "Long", stop=longSL, alert_message="Long stop")
+    if useShort and (not useIndex or idxDir < 0)
+        strategy.entry("Short", strategy.short, stop=orL * (1 - bufferPct / 100), oca_name="orb", oca_type=strategy.oca.cancel, alert_message="Opening range breakout short")
+        strategy.exit("Short SL", "Short", stop=shortSL, alert_message="Short stop")
+else
+    strategy.cancel("Long")
+    strategy.cancel("Short")
+
+plot(not inOr ? orH : na, "Range High", color.new(color.green, 0), style=plot.style_linebr)
+plot(not inOr ? orL : na, "Range Low", color.new(color.red, 0), style=plot.style_linebr)

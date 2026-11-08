@@ -118,7 +118,8 @@ def test_call_raises_on_incomplete_answers(monkeypatch, reason):
 
 
 def _stub_analyzer(tmp_path, monkeypatch, valid_url=True, transcript=("text", "captions"), via_whisper=False):
-    get = ("return self.get_transcript_from_whisper(url)" if via_whisper else f"return {transcript!r}")
+    get = ("self.get_transcript_from_youtube(video_id); return self.get_transcript_from_whisper(url)"
+           if via_whisper else f"return {transcript!r}")
     (tmp_path / "tools").mkdir()
     (tmp_path / "tools" / "video-analyzer.py").write_text(f"""
 CACHE_DIR = ANALYSIS_DIR = None
@@ -128,6 +129,7 @@ def clear_status(): raise RuntimeError("status file touched")
 class VideoAnalyzer:
     def extract_video_id(self, url): return "vid1" if {valid_url!r} else None
     def get_video_metadata(self, url): return {{"title": "Unknown"}}
+    def get_transcript_from_youtube(self, video_id): return None, "disabled"
     def get_transcript_from_whisper(self, url): raise AssertionError("would pip install whisper")
     def get_transcript(self, url, video_id):
         {get}
@@ -155,5 +157,5 @@ def test_fetch_transcript_without_captions_explains_options(tmp_path, monkeypatc
 def test_fetch_transcript_never_installs_whisper(tmp_path, monkeypatch):
     _stub_analyzer(tmp_path, monkeypatch, via_whisper=True)
     monkeypatch.setattr(generate.importlib.util, "find_spec", lambda name: None)
-    with pytest.raises(generate.GenerationError, match="not installed"):
+    with pytest.raises(generate.GenerationError, match="captions: disabled; Whisper is not installed"):
         generate.fetch_transcript("https://youtu.be/vid1")
