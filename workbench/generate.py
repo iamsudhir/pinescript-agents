@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import anthropic
 
 from . import ROOT
+from .data import INTERVALS
 
 # Models that accept server-side refusal fallbacks (fallbacks="default").
 FALLBACK_PREFIXES = ("claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1")
@@ -34,12 +35,13 @@ class Generated:
     pine: str
     python: str
     notes: list = field(default_factory=list)
+    interval: str = "1d"
     transcript: str | None = None
     source: str | None = None
 
 
 REFERENCE_PINE = """//@version=6
-strategy("EMA Cross", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.05)
+strategy("EMA Cross", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.05, calc_on_order_fills=false, calc_on_every_tick=false, process_orders_on_close=false, use_bar_magnifier=false, margin_long=0, margin_short=0)
 //@strategy_alert_message {{strategy.order.alert_message}}
 
 fastLen = input.int(9, "Fast EMA Length", minval=1, group="EMA", tooltip="Period of the fast EMA")
@@ -107,8 +109,10 @@ Return:
 - name: a short human name for the strategy, e.g. "RSI(2) Mean Reversion".
 - pine: a complete Pine Script v6 strategy() following every rule above. Use
   default_qty_type=strategy.percent_of_equity, default_qty_value=100,
-  commission_type=strategy.commission.percent, commission_value=0.05 so results are comparable
-  with the Python backtest.
+  commission_type=strategy.commission.percent, commission_value=0.05, calc_on_order_fills=false,
+  calc_on_every_tick=false, process_orders_on_close=false, use_bar_magnifier=false, margin_long=0,
+  margin_short=0 so results are comparable with the Python backtest (orders fill at the next bar's
+  open, never inside a bar, and no simulated margin calls split off 1-share trades).
 - python: a complete Python module for backtesting.py that
   * imports only numpy, pandas, math and backtesting / backtesting.lib;
   * defines exactly ONE subclass of backtesting.Strategy;
@@ -118,8 +122,17 @@ Return:
     function (no TA-Lib, no pandas_ta);
   * trades in next() with self.buy / self.sell / self.position.close, using sl= and tp= prices for
     stops and targets, and no explicit size (full equity, matching default_qty_value=100);
+  * builds higher-timeframe bars from intraday data the way TradingView does: each HTF bar starts at
+    the session's first bar of the day (NSE 9:15), not at midnight, and its value is usable from
+    the chart bar that completes it (lookahead_off);
   * does no I/O: no data loading, files, network, printing or plotting. Bars arrive as self.data
-    with Open, High, Low, Close, Volume; cash and commission are set by the app.
+    with Open, High, Low, Close, Volume; cash and commission are set by the app. A strategy that
+    needs an index (Pine request.security on e.g. NSE:NIFTY) declares a string class attribute
+    index_ticker = "^NSEI" (Yahoo-style ticker); the app then adds that ticker's bars as
+    self.data.IndexOpen / self.data.IndexClose, NaN where the index has no bar.
+- interval: the bar interval the strategy is designed for. Intraday strategies (session times,
+  end-of-day exits, minute charts) must get an intraday interval: the one the source uses, or the
+  closest available one; they never trade on 1d bars.
 - notes: every place the two versions can behave differently (intrabar stop/target fills,
   request.security or higher-timeframe data, sessions, pyramiding, ...) and every ambiguous rule
   from the source that you had to decide. Empty list if none.
@@ -142,18 +155,19 @@ SCHEMA = {
         "pine": {"type": "string"},
         "python": {"type": "string"},
         "notes": {"type": "array", "items": {"type": "string"}},
+        "interval": {"type": "string", "enum": INTERVALS},
     },
-    "required": ["name", "pine", "python", "notes"],
+    "required": ["name", "pine", "python", "notes", "interval"],
     "additionalProperties": False,
 }
 PY_SCHEMA = {**SCHEMA, "properties": {k: v for k, v in SCHEMA["properties"].items() if k != "pine"},
-             "required": ["name", "python", "notes"]}
+             "required": ["name", "python", "notes", "interval"]}
 
 ANALYST_SYSTEM = ("You are a quantitative trading analyst reviewing backtests of a retail trader's "
                   "strategies (Indian and US markets). Be direct and specific; cite run ids and numbers.")
 
 DRY_RUN = {"name": "EMA Cross (dry run)", "pine": REFERENCE_PINE, "python": REFERENCE_PY,
-           "notes": ["Dry run: WORKBENCH_DRY_RUN is set, Claude was not called."]}
+           "notes": ["Dry run: WORKBENCH_DRY_RUN is set, Claude was not called."], "interval": "1d"}
 DRY_RUN_ANALYSIS = "## Where it works\n(dry run: Claude was not called)\n"
 
 
@@ -232,7 +246,16 @@ def fetch_transcript(url):
         va_mod.clear_status = lambda: None
         va = va_mod.VideoAnalyzer()
         if importlib.util.find_spec("whisper") is None:  # the analyzer would pip install it silently
-            va.get_transcript_from_whisper = lambda url: (None, "no captions and Whisper is not installed")
+            captions = va.get_transcript_from_youtube
+            reason = {}
+
+            def from_youtube(video_id):
+                text, reason["captions"] = captions(video_id)
+                return text, reason["captions"]
+
+            va.get_transcript_from_youtube = from_youtube
+            va.get_transcript_from_whisper = lambda url: (
+                None, f"captions: {reason.get('captions')}; Whisper is not installed")
         video_id = va.extract_video_id(url)
         if not video_id:
             raise GenerationError(f"Not a YouTube video URL: {url}")

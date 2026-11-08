@@ -43,3 +43,10 @@ def conn(tmp_path):
 @pytest.fixture
 def goog():
     return GOOG.copy()
+
+
+@pytest.fixture(autouse=True)
+def no_dhan(monkeypatch):
+    """Tests use yfinance (mocked) unless they set a Dhan token or lake themselves."""
+    monkeypatch.delenv("DHAN_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("LAKE_ROOT", raising=False)

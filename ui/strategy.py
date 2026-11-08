@@ -24,7 +24,8 @@ if state.get("market_for") != sid:  # market settings belong to one strategy: st
     state.form_gen += 1  # fresh widget keys, so the old strategy's typed values are not reused
     state.market = {
         "ticker": s["default_ticker"], "interval": s["default_interval"],
-        "start": dt.date.fromisoformat(data.default_start(s["default_interval"])), "end": dt.date.today(),
+        "start": dt.date.fromisoformat(data.default_start(s["default_interval"], s["default_ticker"])),
+        "end": dt.date.today(),
         "cash": 1_000_000.0, "commission": 0.0005,
     }
 
@@ -84,7 +85,8 @@ market = {
                                    "US: AAPL · crypto: BTC-USD").strip(),
     "interval": c[1].selectbox("Interval", data.INTERVALS, key=f"mk_interval_{gen}",
                                index=data.INTERVALS.index(m["interval"]) if m["interval"] in data.INTERVALS else 0,
-                               help="yfinance keeps ~60 days of 5m-30m bars and ~2 years of 1h bars"),
+                               help="Dhan: up to 5 years of intraday. yfinance: ~30 days of 3m, ~60 days of "
+                                    "5m-30m, ~2 years of 1h"),
     "start": c[2].date_input("Start", m["start"], min_value=MIN_DATE, max_value=dt.date.today(), key=f"mk_start_{gen}"),
     "end": c[3].date_input("End (exclusive)", m["end"], min_value=MIN_DATE, max_value=dt.date.today(),
                             key=f"mk_end_{gen}"),
@@ -92,8 +94,9 @@ market = {
     "commission": c[5].number_input("Commission", value=float(m["commission"]), step=0.0001, format="%.4f",
                                     key=f"mk_comm_{gen}", help="Fraction per side: 0.0005 = 0.05%"),
 }
+c[0].caption(f"Data: {data.source(market['ticker'])}")
 if market["interval"] != m["interval"]:  # the old start may be out of range for the new interval
-    state.market = {**market, "start": dt.date.fromisoformat(data.default_start(market["interval"]))}
+    state.market = {**market, "start": dt.date.fromisoformat(data.default_start(market["interval"], market["ticker"]))}
     state.form_gen += 1
     st.rerun()
 state.market = market
@@ -151,6 +154,11 @@ def show_run(run, where):
     cols = st.columns(5)
     for i, k in enumerate(engine.KEY_STATS):
         cols[i % 5].metric(k, fmt(run["stats"].get(k)))
+    if not run["stats"].get("# Trades"):
+        hint = (" Daily/weekly bars have no time of day, so session or end-of-day rules never fire: pick "
+                "an intraday interval (5m-30m covers the last ~60 days, 1h the last ~2 years)."
+                if run["interval"] in ("1d", "1wk") else " Try a longer date range or different parameters.")
+        st.warning("This run made no trades, so there is nothing to chart." + hint)
     if run["equity"]:
         eq = pd.DataFrame(run["equity"], columns=["Time", "Equity"])
         eq["Time"] = pd.to_datetime(eq["Time"])

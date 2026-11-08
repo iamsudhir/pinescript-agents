@@ -104,7 +104,17 @@ Pages: **Create** (URL / description / import .pine), **Library** (all strategie
 status and rating), **Strategy** (Code, Backtest, Optimize, History, Insights).
 
 Tickers are yfinance symbols: `RELIANCE.NS`, `^NSEI`, `^NSEBANK`, `AAPL`, `BTC-USD`. Intraday data
-is limited by yfinance (~60 days for 5m-30m, ~2 years for 1h).
+is limited by yfinance (~30 days for 3m, ~60 days for 5m-30m, ~2 years for 1h).
+
+NSE stocks (`.NS`) and `^NSEI` / `^NSEBANK` can come from Dhan's feed instead, with years of intraday:
+
+1. **MyHFTAlgoBot lake** (`LAKE_ROOT`): copy only the symbols you test, 5m + daily, from the VPS:
+   `python -m workbench lake-pull RAYMOND.NS SBIN.NS ^NSEI`. Run it again to refresh them.
+   5m, 15m, 30m, 1h, 1d and 1wk are built from the lake, aligned to the 9:15 open.
+2. **Dhan API** (`DHAN_CLIENT_ID`, `DHAN_ACCESS_TOKEN`, needs the Data API plan): days newer than the
+   lake, symbols not pulled, and 3m (built from 1m bars). Tokens expire; paste a new one into `.env`.
+
+`.env` values win over OS environment variables. The backtest form shows which source a ticker uses.
 
 Command line (same database):
 
